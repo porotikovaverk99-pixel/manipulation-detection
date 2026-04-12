@@ -1,0 +1,186 @@
+# ============================================
+# .gitignore для проекта Manipulation Detection
+# ============================================
+
+# --- Go ---
+# Зависимости
+vendor/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Тестовые файлы
+*.test
+*.out
+
+# Файлы отладки
+*.dSYM/
+__debug_bin
+*.log
+
+# Бинарники проекта
+/backend/api
+/backend/collector
+/backend/cmd/api/api
+/backend/cmd/collector/collector
+
+# --- Python ---
+# Виртуальное окружение
+venv/
+env/
+ENV/
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Файлы дистрибуции
+dist/
+build/
+*.egg-info/
+*.egg
+.eggs/
+
+# --- ML сервис ---
+/ml/venv/
+/ml/__pycache__/
+/ml/.pytest_cache/
+/ml/.mypy_cache/
+/ml/.coverage
+/ml/htmlcov/
+
+# --- Frontend (React) ---
+/frontend/node_modules/
+/frontend/build/
+/frontend/.env.local
+/frontend/.env.development.local
+/frontend/.env.test.local
+/frontend/.env.production.local
+/frontend/npm-debug.log*
+/frontend/yarn-debug.log*
+/frontend/yarn-error.log*
+/frontend/package-lock.json
+/frontend/yarn.lock
+
+# --- Backend ---
+/backend/.env
+/backend/tmp/
+/backend/storage.json
+/backend/*.pid
+/backend/logs/
+
+# --- База данных ---
+*.db
+*.sqlite
+*.sqlite3
+*.dump
+*.pgdump
+
+# --- Docker ---
+*.pid
+docker-compose.override.yml
+
+# --- IDE и редакторы ---
+# Visual Studio Code
+.vscode/
+*.code-workspace
+.history/
+
+# IntelliJ IDEA / GoLand / PyCharm
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+.~*
+
+# --- Системные файлы ---
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# --- Логи и временные файлы ---
+*.log
+*.tmp
+*.temp
+*.cache
+*.bak
+*.backup
+*.old
+
+# --- Секреты и конфиги ---
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.crt
+*.p12
+secrets/
+credentials/
+*.secret
+
+# --- Файлы отладки и профилирования ---
+*.prof
+*.pprof
+cpu.out
+mem.out
+trace.out
+
+# --- Архивы ---
+*.zip
+*.tar
+*.tar.gz
+*.rar
+*.7z
+
+# --- Документация (сгенерированная) ---
+/docs/_build/
+/docs/api/
+
+# --- Тесты и покрытие ---
+.coverage
+.coverage.*
+.coveragerc
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+.tox/
+
+# --- Terraform ---
+*.tfstate
+*.tfstate.*
+.terraform/
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraform.lock.hcl
+
+# --- Kubernetes ---
+*.secret.yaml
+*.secret.yml
+
+# --- Примеры разрешенных файлов ---
+!.env.example
+!.gitkeep
