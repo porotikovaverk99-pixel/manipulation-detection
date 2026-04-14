@@ -32,6 +32,17 @@ type UnanalyzedPost struct {
 	PublishedAt time.Time // ← И это
 }
 
+// IngestionContext хранит канонические метаданные происхождения записи.
+type IngestionContext struct {
+	SourceType      string
+	RawPayloadRef   string
+	RawPayloadHash  string
+	DatasetName     string
+	DatasetSplit    string
+	DatasetRecordID string
+	IngestionRunID  *int64
+}
+
 // PostgresDB представляет подключение к PostgreSQL.
 type PostgresDB struct {
 	db *sql.DB
@@ -101,16 +112,37 @@ func (p *PostgresDB) SaveAccount(sourceID int, acc *mastodon.Account) (int64, er
 
 // SavePost сохраняет пост в базу данных.
 func (p *PostgresDB) SavePost(sourceID int, status *mastodon.Status, accountID int64) error {
+	defaultCtx := IngestionContext{
+		SourceType:    "live",
+		RawPayloadRef: status.URL,
+	}
+	return p.SavePostWithIngestion(sourceID, status, accountID, defaultCtx)
+}
+
+// SavePostWithIngestion сохраняет пост в базу с metadata о происхождении payload.
+func (p *PostgresDB) SavePostWithIngestion(sourceID int, status *mastodon.Status, accountID int64, ctx IngestionContext) error {
 	metadata, _ := json.Marshal(map[string]interface{}{
 		"mentions": status.Mentions,
 		"media":    status.MediaAttachments,
 	})
 
+	sourceType := ctx.SourceType
+	if sourceType == "" {
+		sourceType = "live"
+	}
+
+	rawPayloadRef := ctx.RawPayloadRef
+	if rawPayloadRef == "" {
+		rawPayloadRef = status.URL
+	}
+
 	query := `
 		INSERT INTO posts (source_id, external_id, account_id, content, language, 
 		                   published_at, collected_at, post_url, likes_count, 
-		                   reposts_count, replies_count, metadata)
-		VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7, $8, $9, $10, $11)
+		                   reposts_count, replies_count, metadata, source_type,
+		                   raw_payload_ref, raw_payload_hash, dataset_name,
+		                   dataset_split, dataset_record_id, ingestion_run_id)
+		VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 		ON CONFLICT (source_id, external_id) DO NOTHING
 	`
 
@@ -126,6 +158,13 @@ func (p *PostgresDB) SavePost(sourceID int, status *mastodon.Status, accountID i
 		status.ReblogsCount,
 		status.RepliesCount,
 		metadata,
+		sourceType,
+		rawPayloadRef,
+		ctx.RawPayloadHash,
+		ctx.DatasetName,
+		ctx.DatasetSplit,
+		ctx.DatasetRecordID,
+		ctx.IngestionRunID,
 	)
 
 	return err
