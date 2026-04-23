@@ -14,25 +14,28 @@ import (
 	"github.com/porotikovaverk99-pixel/manipulation-detection/backend/internal/config"
 	"github.com/porotikovaverk99-pixel/manipulation-detection/backend/internal/handler"
 	"github.com/porotikovaverk99-pixel/manipulation-detection/backend/internal/logger"
+	"github.com/porotikovaverk99-pixel/manipulation-detection/backend/internal/repository"
 	"github.com/porotikovaverk99-pixel/manipulation-detection/backend/internal/server"
 	"go.uber.org/zap"
 )
 
 // App представляет основное приложение.
 type App struct {
-	config         *config.Config
-	logger         *zap.Logger
-	server         *server.Server
-	pingHandler    *handler.PingHandler
-	analyzeHandler *handler.AnalyzeHandler
+	config          *config.Config
+	logger          *zap.Logger
+	server          *server.Server
+	db              *repository.PostgresDB
+	pingHandler     *handler.PingHandler
+	analyzeHandler  *handler.AnalyzeHandler
+	analysisHandler *handler.AnalysisHandler
+	ingestHandler   *handler.IngestionHandler
+	casesHandler    *handler.CasesHandler
 }
 
 // NewApp создаёт новое приложение.
 func NewApp() (*App, error) {
 
 	cfg := config.ParseFlags()
-
-	fmt.Fprintf(os.Stderr, "DEBUG: DSN from config = %q\n", cfg.DatabaseDSN)
 
 	if err := logger.Initialize(cfg.LogLevel); err != nil {
 		return nil, fmt.Errorf("initialize logger: %w", err)
@@ -46,18 +49,30 @@ func NewApp() (*App, error) {
 	}
 
 	// Инициализируем хендлеры
+	db, err := repository.NewPostgresDB(cfg.DatabaseDSN)
+	if err != nil {
+		return nil, fmt.Errorf("connect database: %w", err)
+	}
+
 	pingHandler := handler.NewPingHandler()
 	analyzeHandler := handler.NewAnalyzeHandler(mlURL)
+	analysisHandler := handler.NewAnalysisHandler(db)
+	ingestHandler := handler.NewIngestionHandler(db)
+	casesHandler := handler.NewCasesHandler(db)
 
 	// Создаем сервер
 	srv := server.New(cfg.RunAddr)
 
 	return &App{
-		config:         &cfg,
-		logger:         zapLogger,
-		server:         srv,
-		pingHandler:    pingHandler,
-		analyzeHandler: analyzeHandler,
+		config:          &cfg,
+		logger:          zapLogger,
+		server:          srv,
+		db:              db,
+		pingHandler:     pingHandler,
+		analyzeHandler:  analyzeHandler,
+		analysisHandler: analysisHandler,
+		ingestHandler:   ingestHandler,
+		casesHandler:    casesHandler,
 	}, nil
 }
 
@@ -66,6 +81,9 @@ func (a *App) setupRoutes() {
 	// Регистрируем маршруты
 	a.server.Handle("/ping", a.pingHandler.Ping())
 	a.server.Handle("/api/analyze", a.analyzeHandler.Analyze())
+	a.server.Get("/api/analysis/summary", a.corsMiddleware(a.analysisHandler.Summary()))
+	a.server.Get("/api/ingestion/runs", a.corsMiddleware(a.ingestHandler.ListRuns()))
+	a.server.Get("/api/cases", a.corsMiddleware(a.casesHandler.List()))
 
 	// Добавляем CORS для фронтенда
 	a.server.Handle("/api/", a.corsMiddleware(a.analyzeHandler.Analyze()))
@@ -100,6 +118,9 @@ func (a *App) Run() error {
 		log.Printf("Доступные эндпоинты:")
 		log.Printf("  GET  /ping")
 		log.Printf("  POST /api/analyze")
+		log.Printf("  GET  /api/analysis/summary")
+		log.Printf("  GET  /api/ingestion/runs")
+		log.Printf("  GET  /api/cases")
 
 		if err := a.server.Run(); err != nil && err != http.ErrServerClosed {
 			serverErr <- err
@@ -138,5 +159,8 @@ func (a *App) shutdown() error {
 
 // Close освобождает ресурсы приложения (логгер).
 func (a *App) Close() {
+	if a.db != nil {
+		_ = a.db.Close()
+	}
 	_ = a.logger.Sync()
 }

@@ -1,3 +1,4 @@
+-- +goose Up
 -- =====================================================
 -- ДИПЛОМ: Детекция манипулятивных тактик в соцсетях
 -- Миграция: создание всех таблиц
@@ -304,3 +305,19 @@ INSERT INTO data_sources (name, api_endpoint, is_active) VALUES
 ('mastodon', 'https://mastodon.social/api/v1/', true)
 ON CONFLICT (name) DO NOTHING;
 
+-- +goose Down
+DROP TABLE IF EXISTS collection_logs;
+DROP TABLE IF EXISTS reviewer_decisions;
+DROP TABLE IF EXISTS review_sessions;
+DROP TABLE IF EXISTS evaluation_metrics;
+DROP TABLE IF EXISTS evidence_cards;
+DROP TABLE IF EXISTS analysis_results;
+DROP TABLE IF EXISTS analysis_windows;
+DROP TABLE IF EXISTS trending_tags;
+DROP TABLE IF EXISTS trending_links;
+DROP TABLE IF EXISTS post_links;
+DROP TABLE IF EXISTS post_tags;
+DROP TABLE IF EXISTS post_mentions;
+DROP TABLE IF EXISTS posts;
+DROP TABLE IF EXISTS accounts;
+DROP TABLE IF EXISTS data_sources;

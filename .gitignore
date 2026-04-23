@@ -80,6 +80,16 @@ build/
 *.dump
 *.pgdump
 
+# --- Датасеты и replay артефакты ---
+/data/raw/
+/data/processed/
+/data/cache/
+/data/exports/
+/backend/data/raw/
+/backend/data/processed/
+/backend/data/cache/
+/backend/data/exports/
+
 # --- Docker ---
 *.pid
 docker-compose.override.yml

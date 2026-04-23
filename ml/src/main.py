@@ -1,38 +1,64 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import List, Optional
+from pydantic import BaseModel, Field
+from typing import Any, Dict, List, Optional
 import uvicorn
+import os
 
 from advanced_analyzer import AdvancedManipulationAnalyzer
 from db_integration import DatabaseConnector
 from analyzer import ManipulationAnalyzer
+from case_analyzer import CaseManipulationAnalyzer
+from bot_analyzer import BotAccountAnalyzer
 
 # Глобальные переменные для хранения ресурсов
 db_connector = None
 advanced_analyzer = None
 simple_analyzer = None
+case_analyzer = None
+bot_analyzer = None
+save_analysis_results = False
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: выполняется ПЕРЕД запуском приложения
-    global db_connector, advanced_analyzer, simple_analyzer
+    global db_connector, advanced_analyzer, simple_analyzer, case_analyzer, bot_analyzer, save_analysis_results
     
     print("🚀 Starting ML Service...")
+    save_analysis_results = os.getenv("ML_SAVE_ANALYSIS_RESULTS", "false").lower() == "true"
     
-    # Подключение к БД
-    conn_string = "postgresql://postgres:123@localhost:5432/manipulation_detection"
-    db_connector = DatabaseConnector(conn_string)
-    db_connector.connect()
-    print("✅ Database connected")
+    # Подключение к БД. Для /predict БД не обязательна, для /analyze/advanced нужна.
+    conn_string = (
+        os.getenv("DATABASE_URL")
+        or os.getenv("DATABASE_URI")
+        or "postgresql://postgres:123@localhost:5432/manipulation_detection"
+    )
+    try:
+        db_connector = DatabaseConnector(conn_string)
+        db_connector.connect()
+        print("✅ Database connected")
+    except Exception as exc:
+        print(f"⚠️ Database unavailable, advanced DB signals degraded: {exc}")
+        db_connector = None
     
     # Инициализация анализаторов
     advanced_analyzer = AdvancedManipulationAnalyzer(
-        db_connection=db_connector.connection,
+        db_connection=db_connector.connection if db_connector else None,
         backend_url="http://localhost:8080"
     )
     simple_analyzer = ManipulationAnalyzer()
+    case_analyzer = CaseManipulationAnalyzer()
+    bot_model_path = os.getenv("BOT_MODEL_PATH", "").strip()
+    if bot_model_path:
+        try:
+            bot_analyzer = BotAccountAnalyzer(bot_model_path)
+            print(f"✅ Bot analyzer loaded from {bot_model_path}")
+        except Exception as exc:
+            print(f"⚠️ Bot analyzer unavailable: {exc}")
+            bot_analyzer = None
+    else:
+        bot_analyzer = None
     print("✅ Analyzers initialized")
     
     yield  # Здесь приложение работает и обрабатывает запросы
@@ -46,7 +72,7 @@ async def lifespan(app: FastAPI):
 # Создаем приложение с lifespan
 app = FastAPI(
     title="Manipulation Detection API", 
-    version="2.0.0",
+    version="2.1.0",
     lifespan=lifespan  # <-- ВАЖНО: используем lifespan вместо on_event
 )
 
@@ -77,6 +103,93 @@ class SimplePredictRequest(BaseModel):
     text: str
     language: str = "ru"
 
+class CasePostRequest(BaseModel):
+    post_id: int
+    external_id: str
+    account_id: int
+    username: str
+    published_at: str
+    content: str
+    is_case_root: bool = False
+    reply_to_post_id: Optional[int] = None
+    tags: List[str] = Field(default_factory=list)
+    links: List[str] = Field(default_factory=list)
+
+class CaseAnalyzeRequest(BaseModel):
+    case_id: int
+    external_case_id: str
+    source_name: str
+    dataset_name: Optional[str] = ""
+    dataset_split: Optional[str] = ""
+    case_type: str = "thread"
+    label: Optional[str] = None
+    title: Optional[str] = None
+    event_name: Optional[str] = None
+    first_event_at: Optional[str] = None
+    last_event_at: Optional[str] = None
+    posts: List[CasePostRequest]
+
+class CaseAnalyzeResponse(BaseModel):
+    feature_version: str
+    score_version: str
+    pipeline_hash: str
+    risk_score: float
+    risk_level: str
+    confidence_score: float
+    temporal_score: float
+    coordination_score: float
+    content_score: float
+    event_count: int
+    unique_account_count: int
+    unique_url_count: int
+    unique_hashtag_count: int
+    temporal_features: Dict[str, Any]
+    coordination_features: Dict[str, Any]
+    content_features: Dict[str, Any]
+    feature_payload: Dict[str, Any]
+    evidence: List[str]
+    model_info: Dict[str, Any]
+
+class BotTweetRequest(BaseModel):
+    text: str = ""
+    source: Optional[str] = None
+    in_reply_to_status_id: Optional[str] = None
+    retweeted_status_id: Optional[str] = None
+    retweet_count: float = 0
+    reply_count: float = 0
+    favorite_count: float = 0
+    num_hashtags: float = 0
+    num_urls: float = 0
+    num_mentions: float = 0
+
+class BotAnalyzeRequest(BaseModel):
+    account_id: Optional[str] = None
+    username: Optional[str] = None
+    statuses_count: float = 0
+    followers_count: float = 0
+    friends_count: float = 0
+    favourites_count: float = 0
+    listed_count: float = 0
+    default_profile: bool = False
+    default_profile_image: bool = False
+    geo_enabled: bool = False
+    verified: bool = False
+    protected: bool = False
+    description: Optional[str] = None
+    url: Optional[str] = None
+    location: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    tweets: List[BotTweetRequest] = Field(default_factory=list)
+
+class BotAnalyzeResponse(BaseModel):
+    model_version: str
+    model_path: str
+    bot_score: float
+    predicted_label: str
+    feature_payload: Dict[str, Any]
+    top_contributors: List[Dict[str, Any]]
+
 # ========== ЭНДПОИНТЫ ==========
 
 @app.get("/health")
@@ -84,10 +197,12 @@ async def health():
     return {
         "status": "ok", 
         "service": "ml-detector", 
-        "version": "2.0",
+        "version": "2.1",
         "analyzers": {
             "advanced": advanced_analyzer is not None,
-            "simple": simple_analyzer is not None
+            "simple": simple_analyzer is not None,
+            "case": case_analyzer is not None,
+            "bot": bot_analyzer is not None
         }
     }
 
@@ -134,8 +249,8 @@ async def analyze_advanced(request: AnalyzeRequest, background_tasks: Background
             account_created_at=account_created_at or datetime.now()
         )
         
-        # Сохранение результатов в фоне
-        if db_connector:
+        # В dataset-first pipeline результат сохраняет backend dataset_analyzer.
+        if db_connector and save_analysis_results:
             background_tasks.add_task(
                 db_connector.save_analysis_result,
                 request.post_id,
@@ -176,6 +291,30 @@ async def analyze_batch(request: BatchAnalyzeRequest):
             results.append({"error": str(e), "post_id": post.post_id})
     
     return {"results": results}
+
+@app.post("/analyze/case", response_model=CaseAnalyzeResponse)
+async def analyze_case(request: CaseAnalyzeRequest):
+    """Case-level baseline analysis for threads/clusters."""
+    if not case_analyzer:
+        raise HTTPException(status_code=503, detail="Case analyzer not initialized")
+
+    try:
+        payload = request.model_dump()
+        return case_analyzer.analyze_case(payload)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/analyze/bot-account", response_model=BotAnalyzeResponse)
+async def analyze_bot_account(request: BotAnalyzeRequest):
+    """Account-level bot likelihood based on Cresci-trained baseline."""
+    if not bot_analyzer:
+        raise HTTPException(status_code=503, detail="Bot analyzer not initialized")
+
+    try:
+        payload = request.model_dump()
+        return bot_analyzer.analyze_account(payload)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/account/{account_id}/analysis")
 async def analyze_account(account_id: int):

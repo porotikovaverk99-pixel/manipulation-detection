@@ -175,9 +175,9 @@ func (c *Collector) AnalyzeUnanalyzedPosts() error {
 		}
 
 		mlResp, err := mlClient.AnalyzeText(
-			int(fullData.ID),
+			fullData.ID,
 			cleanText,
-			int(fullData.AccountID),
+			fullData.AccountID,
 			fullData.Username,
 			fullData.PublishedAt,
 			fullData.FollowersCount,
