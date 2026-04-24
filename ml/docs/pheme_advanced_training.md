@@ -240,6 +240,107 @@ Conclusion:
 - the result supports keeping `pheme-distilroberta-root-reactions-v1` as the default runtime text model;
 - for the next neural step, prefer richer input/context checks over simply increasing model size.
 
+## Text Input Ablations
+
+We tested whether the current `root tweet + reactions` input is justified, and whether a longer token budget helps.
+
+### Root-only Control
+
+```text
+model_version = pheme-distilroberta-root-only-v1
+base_model = distilroberta-base
+text_mode = root_only
+epochs = 3
+learning_rate = 2e-5
+max_length = 192
+max_reactions = 0
+output = /workspace/evaluation_outputs/pheme_transformer_root_only_run1
+```
+
+Observed result:
+
+- Precision@10: `0.800`;
+- Precision@20: `0.850`;
+- Precision: `0.734`;
+- Recall: `0.780`;
+- F1: `0.757`;
+- ROC-AUC: `0.814`;
+- PR-AUC: `0.796`;
+- training seconds: `91.8`.
+
+Comparison:
+
+| Model | Input | Precision@10 | Precision@20 | Precision | Recall | F1 | ROC-AUC | PR-AUC | Training seconds |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `pheme-distilroberta-root-only-v1` | root only | `0.800` | `0.850` | `0.734` | `0.780` | `0.757` | `0.814` | `0.796` | `91.8` |
+| `pheme-distilroberta-root-reactions-v1` | root + 8 reactions | `0.900` | `0.850` | `0.712` | `0.826` | `0.765` | `0.821` | `0.787` | `378.3` |
+
+Interpretation:
+
+- root-only is a strong and much faster baseline;
+- reactions improve top-10 triage, recall, F1, and ROC-AUC, but the gain is modest on PHEME;
+- the project should keep both modes conceptually:
+  - root-only as a fast fallback when a case has no reactions yet;
+  - root + reactions as the fuller case-level detector.
+
+### Longer Context For Reactions
+
+```text
+model_version = pheme-distilroberta-root-reactions-len256-v1
+base_model = distilroberta-base
+text_mode = root_reactions
+epochs = 3
+learning_rate = 2e-5
+max_length = 256
+max_reactions = 8
+output = /workspace/evaluation_outputs/pheme_transformer_root_reactions_len256_run1
+```
+
+Observed result:
+
+- Precision@10: `1.000`;
+- Precision@20: `0.800`;
+- Precision: `0.695`;
+- Recall: `0.844`;
+- F1: `0.762`;
+- ROC-AUC: `0.814`;
+- PR-AUC: `0.782`;
+- training seconds: `527.8`.
+
+Comparison with the current default:
+
+| Model | Max length | Precision@10 | Precision@20 | Precision | Recall | F1 | ROC-AUC | PR-AUC | Training seconds |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `pheme-distilroberta-root-reactions-v1` | `192` | `0.900` | `0.850` | `0.712` | `0.826` | `0.765` | `0.821` | `0.787` | `378.3` |
+| `pheme-distilroberta-root-reactions-len256-v1` | `256` | `1.000` | `0.800` | `0.695` | `0.844` | `0.762` | `0.814` | `0.782` | `527.8` |
+
+Interpretation:
+
+- a longer context improves the very top of the ranking;
+- it does not improve the general detector quality and is slower;
+- keep `max_length=192` as the default runtime setting;
+- mention `max_length=256` as an optional aggressive top-10 triage variant, not as the main model.
+
+## Updated Neural Decision
+
+Current recommended transformer setup:
+
+- default runtime text model: `pheme-distilroberta-root-reactions-v1`;
+- default input: `root tweet + up to 8 reactions`;
+- default `max_length`: `192`;
+- fast fallback: `pheme-distilroberta-root-only-v1`;
+- rejected as default:
+  - `pheme-distilroberta-root-reactions-v2-5epochs`;
+  - `pheme-roberta-base-root-reactions-v1`;
+  - `pheme-distilroberta-root-reactions-len256-v1`.
+
+The next engineering step is no longer single-model tuning. It is model comparison and ensembling through `case_model_scores`:
+
+- feature/logistic score;
+- LightGBM case-feature score;
+- transformer text score;
+- optional ensemble score.
+
 ## Runtime Usage
 
 The saved PHEME transformer can now be used outside the training script.
