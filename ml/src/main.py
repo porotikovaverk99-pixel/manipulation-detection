@@ -12,6 +12,7 @@ from analyzer import ManipulationAnalyzer
 from case_analyzer import CaseManipulationAnalyzer
 from bot_analyzer import BotAccountAnalyzer
 from trained_case_analyzer import TrainedCaseAnalyzer
+from pheme_transformer_analyzer import PhemeTransformerAnalyzer
 
 # Глобальные переменные для хранения ресурсов
 db_connector = None
@@ -20,12 +21,14 @@ simple_analyzer = None
 case_analyzer = None
 bot_analyzer = None
 case_analyzer_mode = "unavailable"
+pheme_transformer_analyzer = None
+pheme_transformer_mode = "unavailable"
 save_analysis_results = False
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: выполняется ПЕРЕД запуском приложения
-    global db_connector, advanced_analyzer, simple_analyzer, case_analyzer, bot_analyzer, case_analyzer_mode, save_analysis_results
+    global db_connector, advanced_analyzer, simple_analyzer, case_analyzer, bot_analyzer, case_analyzer_mode, pheme_transformer_analyzer, pheme_transformer_mode, save_analysis_results
     
     print("🚀 Starting ML Service...")
     save_analysis_results = os.getenv("ML_SAVE_ANALYSIS_RESULTS", "false").lower() == "true"
@@ -34,7 +37,7 @@ async def lifespan(app: FastAPI):
     conn_string = (
         os.getenv("DATABASE_URL")
         or os.getenv("DATABASE_URI")
-        or "postgresql://postgres:123@localhost:5432/manipulation_detection"
+        or "postgresql://postgres:password@localhost:5432/manipulation_detection"
     )
     try:
         db_connector = DatabaseConnector(conn_string)
@@ -72,6 +75,20 @@ async def lifespan(app: FastAPI):
             print(f"⚠️ Trained case analyzer unavailable, using heuristic fallback: {exc}")
             case_analyzer = CaseManipulationAnalyzer(bot_analyzer=bot_analyzer)
             case_analyzer_mode = "heuristic"
+
+    pheme_transformer_path = os.getenv("PHEME_TRANSFORMER_MODEL_PATH", "").strip()
+    if pheme_transformer_path:
+        try:
+            pheme_transformer_analyzer = PhemeTransformerAnalyzer(pheme_transformer_path)
+            pheme_transformer_mode = "trained"
+            print(f"✅ PHEME transformer analyzer loaded from {pheme_transformer_path}")
+        except Exception as exc:
+            print(f"⚠️ PHEME transformer analyzer unavailable: {exc}")
+            pheme_transformer_analyzer = None
+            pheme_transformer_mode = "unavailable"
+    else:
+        pheme_transformer_analyzer = None
+        pheme_transformer_mode = "disabled"
     print("✅ Analyzers initialized")
     
     yield  # Здесь приложение работает и обрабатывает запросы
@@ -172,6 +189,20 @@ class CaseAnalyzeResponse(BaseModel):
     evidence: List[str]
     model_info: Dict[str, Any]
 
+class CaseTextAnalyzeResponse(BaseModel):
+    model_version: str
+    model_path: str
+    pipeline_hash: str
+    risk_score: float
+    risk_level: str
+    confidence_score: float
+    text_mode: str
+    max_length: int
+    reaction_count_used: int
+    feature_payload: Dict[str, Any]
+    evidence: List[str]
+    model_info: Dict[str, Any]
+
 class BotTweetRequest(BaseModel):
     text: str = ""
     source: Optional[str] = None
@@ -224,9 +255,11 @@ async def health():
             "advanced": advanced_analyzer is not None,
             "simple": simple_analyzer is not None,
             "case": case_analyzer is not None,
-            "bot": bot_analyzer is not None
+            "bot": bot_analyzer is not None,
+            "pheme_transformer": pheme_transformer_analyzer is not None
         },
         "case_mode": case_analyzer_mode,
+        "pheme_transformer_mode": pheme_transformer_mode,
     }
 
 @app.post("/predict")
@@ -324,6 +357,18 @@ async def analyze_case(request: CaseAnalyzeRequest):
     try:
         payload = request.model_dump()
         return case_analyzer.analyze_case(payload)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/analyze/case-text", response_model=CaseTextAnalyzeResponse)
+async def analyze_case_text(request: CaseAnalyzeRequest):
+    """Case-level transformer analysis for PHEME-style source tweet + reactions."""
+    if not pheme_transformer_analyzer:
+        raise HTTPException(status_code=503, detail="PHEME transformer analyzer not initialized")
+
+    try:
+        payload = request.model_dump()
+        return pheme_transformer_analyzer.analyze_case(payload)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

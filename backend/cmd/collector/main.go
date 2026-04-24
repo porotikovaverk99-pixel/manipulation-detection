@@ -23,7 +23,7 @@ func main() {
 		connStr = os.Getenv("DATABASE_URI")
 	}
 	if connStr == "" {
-		connStr = "postgres://postgres:123@localhost:5432/manipulation_detection?sslmode=disable"
+		connStr = "postgres://postgres:password@localhost:5432/manipulation_detection?sslmode=disable"
 	}
 
 	db, err := repository.NewPostgresDB(connStr)

@@ -151,3 +151,70 @@ Use three tiers in the diploma:
 The recommended main scientific result can now be framed as:
 
 > A unified case-level pipeline where interpretable engineered features provide evidence cards, and a transformer text model improves event-level predictive performance.
+
+## Runtime Usage
+
+The saved PHEME transformer can now be used outside the training script.
+
+Runtime wrapper:
+
+```bash
+ml/src/pheme_transformer_analyzer.py
+```
+
+CLI smoke runner:
+
+```bash
+ml/src/run_pheme_transformer_case.py
+```
+
+FastAPI endpoint:
+
+```text
+POST /analyze/case-text
+```
+
+It accepts the same payload shape as `POST /analyze/case` and returns:
+
+- `risk_score`;
+- `risk_level`;
+- `confidence_score`;
+- transformer model metadata;
+- compact evidence such as `text_model_score`, threshold, and number of reactions used.
+
+The current `/analyze/case` endpoint is intentionally unchanged. It remains the interpretable feature/evidence analyzer used by the backend case scorer. The transformer endpoint is separate so we can compare and later combine both signals without silently changing stored case scores.
+
+Run one DB-backed case through the saved model in ROCm Docker:
+
+```bash
+docker run --rm \
+  --network host \
+  --device=/dev/kfd \
+  --device=/dev/dri \
+  --group-add 44 \
+  --group-add 110 \
+  --ipc=host \
+  --shm-size 8G \
+  -e HIP_VISIBLE_DEVICES=0 \
+  -e CUDA_VISIBLE_DEVICES=0 \
+  -e ROCR_VISIBLE_DEVICES=0 \
+  -e HF_HOME=/workspace/.cache/huggingface \
+  -e PIP_CACHE_DIR=/tmp/pip-cache \
+  -v /home/richt/Documents/coding/cursor_fun/dplm_tst:/workspace \
+  -w /workspace/manipulation-detection \
+  rocm/pytorch:latest \
+  bash -lc 'python3 -m pip install -q -r ml/requirements-rocm-training.txt && python3 ml/src/run_pheme_transformer_case.py \
+    --database-url "postgresql://postgres:password@localhost:5432/manipulation_detection" \
+    --model-path /workspace/evaluation_outputs/pheme_transformer_root_reactions_run1/model \
+    --case-id 1 \
+    --pretty'
+```
+
+Run the ML API with the transformer endpoint enabled:
+
+```bash
+PHEME_TRANSFORMER_MODEL_PATH='/home/richt/Documents/coding/cursor_fun/dplm_tst/evaluation_outputs/pheme_transformer_root_reactions_run1/model' \
+ml/.venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000 --app-dir ml/src
+```
+
+For GPU runtime, start the service from the ROCm Docker image instead of the local CPU virtualenv.
