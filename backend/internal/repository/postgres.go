@@ -145,12 +145,13 @@ type AnalysisSummary struct {
 
 // CaseFilter задает фильтр для case-level выборок.
 type CaseFilter struct {
-	SourceName   string
-	DatasetName  string
-	DatasetSplit string
-	Label        string
-	OnlyUnscored bool
-	Limit        int
+	SourceName            string
+	DatasetName           string
+	DatasetSplit          string
+	Label                 string
+	OnlyUnscored          bool
+	MissingModelScoreKeys []string
+	Limit                 int
 }
 
 // CasePostData представляет посты, входящие в case.
@@ -218,6 +219,24 @@ type CaseScoreRecord struct {
 	RiskLevel         string
 	Evidence          []string
 	PipelineHash      string
+}
+
+// CaseModelScoreRecord хранит результат конкретной модели/скорера для case.
+type CaseModelScoreRecord struct {
+	CaseID            int64
+	ScorerKey         string
+	ModelVersion      string
+	RiskScore         float64
+	RiskLevel         string
+	ConfidenceScore   *float64
+	TemporalScore     *float64
+	CoordinationScore *float64
+	ContentScore      *float64
+	Evidence          []string
+	FeaturePayload    map[string]interface{}
+	ModelInfo         map[string]interface{}
+	PipelineHash      string
+	SourceEndpoint    string
 }
 
 // CaseListItem представляет компактное представление case для API.
@@ -1152,7 +1171,25 @@ func (p *PostgresDB) GetCasesForScoring(filter CaseFilter) ([]CaseForScoring, er
 		conditions = append(conditions, fmt.Sprintf("c.label = $%d", len(args)))
 	}
 	if filter.OnlyUnscored {
-		conditions = append(conditions, "NOT EXISTS (SELECT 1 FROM case_scores cs WHERE cs.case_id = c.id)")
+		if len(filter.MissingModelScoreKeys) > 0 {
+			missingConditions := make([]string, 0, len(filter.MissingModelScoreKeys))
+			for _, key := range filter.MissingModelScoreKeys {
+				key = strings.TrimSpace(key)
+				if key == "" {
+					continue
+				}
+				args = append(args, key)
+				missingConditions = append(
+					missingConditions,
+					fmt.Sprintf("NOT EXISTS (SELECT 1 FROM case_model_scores cms WHERE cms.case_id = c.id AND cms.scorer_key = $%d)", len(args)),
+				)
+			}
+			if len(missingConditions) > 0 {
+				conditions = append(conditions, "("+strings.Join(missingConditions, " OR ")+")")
+			}
+		} else {
+			conditions = append(conditions, "NOT EXISTS (SELECT 1 FROM case_scores cs WHERE cs.case_id = c.id)")
+		}
 	}
 	if len(conditions) == 0 {
 		conditions = append(conditions, "1=1")
@@ -1429,6 +1466,65 @@ func (p *PostgresDB) SaveCaseScore(rec CaseScoreRecord) error {
 	)
 	if err != nil {
 		return fmt.Errorf("save case score: %w", err)
+	}
+	return nil
+}
+
+// SaveCaseModelScore сохраняет результат конкретного model/scorer для case.
+func (p *PostgresDB) SaveCaseModelScore(rec CaseModelScoreRecord) error {
+	evidenceJSON, err := json.Marshal(rec.Evidence)
+	if err != nil {
+		return fmt.Errorf("marshal case model evidence: %w", err)
+	}
+	payloadJSON, err := marshalJSONObject(rec.FeaturePayload)
+	if err != nil {
+		return fmt.Errorf("marshal case model feature payload: %w", err)
+	}
+	modelInfoJSON, err := marshalJSONObject(rec.ModelInfo)
+	if err != nil {
+		return fmt.Errorf("marshal case model info: %w", err)
+	}
+
+	_, err = p.db.Exec(`
+		INSERT INTO case_model_scores (
+			case_id, scorer_key, model_version, risk_score, risk_level,
+			confidence_score, temporal_score, coordination_score, content_score,
+			evidence, feature_payload, model_info, pipeline_hash, source_endpoint,
+			computed_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12::jsonb, $13, $14, NOW())
+		ON CONFLICT (case_id, scorer_key) DO UPDATE SET
+			model_version = EXCLUDED.model_version,
+			risk_score = EXCLUDED.risk_score,
+			risk_level = EXCLUDED.risk_level,
+			confidence_score = EXCLUDED.confidence_score,
+			temporal_score = EXCLUDED.temporal_score,
+			coordination_score = EXCLUDED.coordination_score,
+			content_score = EXCLUDED.content_score,
+			evidence = EXCLUDED.evidence,
+			feature_payload = EXCLUDED.feature_payload,
+			model_info = EXCLUDED.model_info,
+			pipeline_hash = EXCLUDED.pipeline_hash,
+			source_endpoint = EXCLUDED.source_endpoint,
+			computed_at = NOW()
+	`,
+		rec.CaseID,
+		rec.ScorerKey,
+		rec.ModelVersion,
+		rec.RiskScore,
+		rec.RiskLevel,
+		rec.ConfidenceScore,
+		rec.TemporalScore,
+		rec.CoordinationScore,
+		rec.ContentScore,
+		string(evidenceJSON),
+		string(payloadJSON),
+		string(modelInfoJSON),
+		rec.PipelineHash,
+		rec.SourceEndpoint,
+	)
+	if err != nil {
+		return fmt.Errorf("save case model score: %w", err)
 	}
 	return nil
 }

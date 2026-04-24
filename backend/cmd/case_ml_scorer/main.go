@@ -12,6 +12,11 @@ import (
 	"github.com/porotikovaverk99-pixel/manipulation-detection/backend/internal/repository"
 )
 
+const (
+	scorerFeature = "feature"
+	scorerText    = "text"
+)
+
 func main() {
 	_ = godotenv.Load()
 
@@ -23,13 +28,20 @@ func main() {
 		log.Fatal("DATABASE_URL or DATABASE_URI is required")
 	}
 
+	scorers := parseScorers(getenvDefault("CASE_SCORERS", scorerFeature))
+	modelScoreKeys := make([]string, 0, len(scorers))
+	for _, scorer := range scorers {
+		modelScoreKeys = append(modelScoreKeys, scorerModelKey(scorer))
+	}
+
 	filter := repository.CaseFilter{
-		SourceName:   getenvDefault("SOURCE_NAME", ""),
-		DatasetName:  getenvDefault("DATASET_NAME", ""),
-		DatasetSplit: getenvDefault("DATASET_SPLIT", ""),
-		Label:        getenvDefault("CASE_LABEL", ""),
-		OnlyUnscored: getenvBool("ONLY_UNSCORED", true),
-		Limit:        getenvInt("CASE_LIMIT", 20),
+		SourceName:            getenvDefault("SOURCE_NAME", ""),
+		DatasetName:           getenvDefault("DATASET_NAME", ""),
+		DatasetSplit:          getenvDefault("DATASET_SPLIT", ""),
+		Label:                 getenvDefault("CASE_LABEL", ""),
+		OnlyUnscored:          getenvBool("ONLY_UNSCORED", true),
+		MissingModelScoreKeys: modelScoreKeys,
+		Limit:                 getenvInt("CASE_LIMIT", 20),
 	}
 
 	db, err := repository.NewPostgresDB(connStr)
@@ -55,76 +67,66 @@ func main() {
 	started := time.Now()
 
 	log.Printf(
-		"case ML scorer started: cases=%d dataset=%s split=%s source=%s ml=%s only_unscored=%t",
+		"case ML scorer started: cases=%d dataset=%s split=%s source=%s ml=%s scorers=%s only_unscored=%t",
 		len(cases),
 		filter.DatasetName,
 		filter.DatasetSplit,
 		filter.SourceName,
 		mlURL,
+		strings.Join(scorers, ","),
 		filter.OnlyUnscored,
 	)
 
 	for _, c := range cases {
 		req := buildCaseMLRequest(c)
-		resp, err := mlClient.AnalyzeCase(req)
-		if err != nil {
-			failed++
-			log.Printf("case #%d ML scoring failed: %v", c.ID, err)
-			continue
+		caseSucceeded := false
+
+		if hasScorer(scorers, scorerFeature) {
+			resp, err := mlClient.AnalyzeCase(req)
+			if err != nil {
+				failed++
+				log.Printf("case #%d feature ML scoring failed: %v", c.ID, err)
+			} else if err := saveFeatureScore(db, c, resp, mlURL); err != nil {
+				failed++
+				log.Printf("case #%d save feature score failed: %v", c.ID, err)
+			} else {
+				caseSucceeded = true
+				log.Printf(
+					"case #%d feature ML scored: external_case_id=%s risk=%.3f level=%s confidence=%.3f",
+					c.ID,
+					c.ExternalCaseID,
+					resp.RiskScore,
+					resp.RiskLevel,
+					resp.ConfidenceScore,
+				)
+			}
 		}
 
-		features := repository.CaseFeaturesRecord{
-			CaseID:               c.ID,
-			FeatureVersion:       resp.FeatureVersion,
-			EventCount:           resp.EventCount,
-			UniqueAccountCount:   resp.UniqueAccountCount,
-			UniqueURLCount:       resp.UniqueURLCount,
-			UniqueHashtagCount:   resp.UniqueHashtagCount,
-			TemporalFeatures:     copyMap(resp.TemporalFeatures),
-			CoordinationFeatures: copyMap(resp.CoordinationFeatures),
-			ContentFeatures:      copyMap(resp.ContentFeatures),
-			FeaturePayload: mergeMaps(
-				copyMap(resp.FeaturePayload),
-				map[string]interface{}{
-					"confidence_score": resp.ConfidenceScore,
-					"model_info":       resp.ModelInfo,
-					"scoring_source":   "ml_service",
-					"ml_service_url":   mlURL,
-				},
-			),
-		}
-		score := repository.CaseScoreRecord{
-			CaseID:            c.ID,
-			ScoreVersion:      resp.ScoreVersion,
-			TemporalScore:     resp.TemporalScore,
-			CoordinationScore: resp.CoordinationScore,
-			ContentScore:      resp.ContentScore,
-			RiskScore:         resp.RiskScore,
-			RiskLevel:         resp.RiskLevel,
-			Evidence:          append([]string(nil), resp.Evidence...),
-			PipelineHash:      resp.PipelineHash,
+		if hasScorer(scorers, scorerText) {
+			resp, err := mlClient.AnalyzeCaseText(req)
+			if err != nil {
+				failed++
+				log.Printf("case #%d text ML scoring failed: %v", c.ID, err)
+			} else if err := saveTextScore(db, c, resp, mlURL); err != nil {
+				failed++
+				log.Printf("case #%d save text score failed: %v", c.ID, err)
+			} else {
+				caseSucceeded = true
+				log.Printf(
+					"case #%d text ML scored: external_case_id=%s risk=%.3f level=%s confidence=%.3f reactions=%d",
+					c.ID,
+					c.ExternalCaseID,
+					resp.RiskScore,
+					resp.RiskLevel,
+					resp.ConfidenceScore,
+					resp.ReactionCountUsed,
+				)
+			}
 		}
 
-		if err := db.SaveCaseFeatures(features); err != nil {
-			failed++
-			log.Printf("case #%d save features failed: %v", c.ID, err)
-			continue
+		if caseSucceeded {
+			processed++
 		}
-		if err := db.SaveCaseScore(score); err != nil {
-			failed++
-			log.Printf("case #%d save score failed: %v", c.ID, err)
-			continue
-		}
-
-		processed++
-		log.Printf(
-			"case #%d ML scored: external_case_id=%s risk=%.3f level=%s confidence=%.3f",
-			c.ID,
-			c.ExternalCaseID,
-			resp.RiskScore,
-			resp.RiskLevel,
-			resp.ConfidenceScore,
-		)
 	}
 
 	log.Printf(
@@ -133,6 +135,99 @@ func main() {
 		failed,
 		time.Since(started).Round(time.Millisecond),
 	)
+}
+
+func saveFeatureScore(db *repository.PostgresDB, c repository.CaseForScoring, resp *collector.CaseMLResponse, mlURL string) error {
+	features := repository.CaseFeaturesRecord{
+		CaseID:               c.ID,
+		FeatureVersion:       resp.FeatureVersion,
+		EventCount:           resp.EventCount,
+		UniqueAccountCount:   resp.UniqueAccountCount,
+		UniqueURLCount:       resp.UniqueURLCount,
+		UniqueHashtagCount:   resp.UniqueHashtagCount,
+		TemporalFeatures:     copyMap(resp.TemporalFeatures),
+		CoordinationFeatures: copyMap(resp.CoordinationFeatures),
+		ContentFeatures:      copyMap(resp.ContentFeatures),
+		FeaturePayload: mergeMaps(
+			copyMap(resp.FeaturePayload),
+			map[string]interface{}{
+				"confidence_score": resp.ConfidenceScore,
+				"model_info":       resp.ModelInfo,
+				"scoring_source":   "ml_service",
+				"ml_service_url":   mlURL,
+			},
+		),
+	}
+	score := repository.CaseScoreRecord{
+		CaseID:            c.ID,
+		ScoreVersion:      resp.ScoreVersion,
+		TemporalScore:     resp.TemporalScore,
+		CoordinationScore: resp.CoordinationScore,
+		ContentScore:      resp.ContentScore,
+		RiskScore:         resp.RiskScore,
+		RiskLevel:         resp.RiskLevel,
+		Evidence:          append([]string(nil), resp.Evidence...),
+		PipelineHash:      resp.PipelineHash,
+	}
+	modelScore := repository.CaseModelScoreRecord{
+		CaseID:            c.ID,
+		ScorerKey:         scorerModelKey(scorerFeature),
+		ModelVersion:      resp.ScoreVersion,
+		RiskScore:         resp.RiskScore,
+		RiskLevel:         resp.RiskLevel,
+		ConfidenceScore:   floatPtr(resp.ConfidenceScore),
+		TemporalScore:     floatPtr(resp.TemporalScore),
+		CoordinationScore: floatPtr(resp.CoordinationScore),
+		ContentScore:      floatPtr(resp.ContentScore),
+		Evidence:          append([]string(nil), resp.Evidence...),
+		FeaturePayload: mergeMaps(
+			copyMap(resp.FeaturePayload),
+			map[string]interface{}{
+				"feature_version":   resp.FeatureVersion,
+				"scoring_source":    "ml_service",
+				"ml_service_url":    mlURL,
+				"active_case_score": true,
+			},
+		),
+		ModelInfo:      copyMap(resp.ModelInfo),
+		PipelineHash:   resp.PipelineHash,
+		SourceEndpoint: "/analyze/case",
+	}
+
+	if err := db.SaveCaseFeatures(features); err != nil {
+		return err
+	}
+	if err := db.SaveCaseScore(score); err != nil {
+		return err
+	}
+	return db.SaveCaseModelScore(modelScore)
+}
+
+func saveTextScore(db *repository.PostgresDB, c repository.CaseForScoring, resp *collector.CaseTextMLResponse, mlURL string) error {
+	modelScore := repository.CaseModelScoreRecord{
+		CaseID:          c.ID,
+		ScorerKey:       scorerModelKey(scorerText),
+		ModelVersion:    resp.ModelVersion,
+		RiskScore:       resp.RiskScore,
+		RiskLevel:       resp.RiskLevel,
+		ConfidenceScore: floatPtr(resp.ConfidenceScore),
+		Evidence:        append([]string(nil), resp.Evidence...),
+		FeaturePayload: mergeMaps(
+			copyMap(resp.FeaturePayload),
+			map[string]interface{}{
+				"model_path":          resp.ModelPath,
+				"text_mode":           resp.TextMode,
+				"max_length":          resp.MaxLength,
+				"reaction_count_used": resp.ReactionCountUsed,
+				"scoring_source":      "ml_service",
+				"ml_service_url":      mlURL,
+			},
+		),
+		ModelInfo:      copyMap(resp.ModelInfo),
+		PipelineHash:   resp.PipelineHash,
+		SourceEndpoint: "/analyze/case-text",
+	}
+	return db.SaveCaseModelScore(modelScore)
 }
 
 func buildCaseMLRequest(c repository.CaseForScoring) collector.CaseMLRequest {
@@ -216,6 +311,63 @@ func mergeMaps(base map[string]interface{}, extra map[string]interface{}) map[st
 		base[key] = value
 	}
 	return base
+}
+
+func parseScorers(raw string) []string {
+	parts := strings.Split(raw, ",")
+	seen := make(map[string]struct{}, len(parts))
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		key := strings.ToLower(strings.TrimSpace(part))
+		if key == "" {
+			continue
+		}
+		if key == "all" {
+			for _, scorer := range []string{scorerFeature, scorerText} {
+				if _, ok := seen[scorer]; !ok {
+					seen[scorer] = struct{}{}
+					out = append(out, scorer)
+				}
+			}
+			continue
+		}
+		if key != scorerFeature && key != scorerText {
+			log.Fatalf("unsupported CASE_SCORERS value %q (supported: feature,text,all)", key)
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, key)
+	}
+	if len(out) == 0 {
+		return []string{scorerFeature}
+	}
+	return out
+}
+
+func hasScorer(scorers []string, scorer string) bool {
+	for _, item := range scorers {
+		if item == scorer {
+			return true
+		}
+	}
+	return false
+}
+
+func scorerModelKey(scorer string) string {
+	switch scorer {
+	case scorerFeature:
+		return getenvDefault("CASE_FEATURE_SCORER_KEY", "case_feature")
+	case scorerText:
+		return getenvDefault("CASE_TEXT_SCORER_KEY", "pheme_transformer_text")
+	default:
+		return scorer
+	}
+}
+
+func floatPtr(value float64) *float64 {
+	return &value
 }
 
 func getenvDefault(key, fallback string) string {

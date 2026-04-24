@@ -111,6 +111,22 @@ type CaseMLResponse struct {
 	ModelInfo            map[string]interface{} `json:"model_info"`
 }
 
+// CaseTextMLResponse представляет ответ transformer text анализа case.
+type CaseTextMLResponse struct {
+	ModelVersion      string                 `json:"model_version"`
+	ModelPath         string                 `json:"model_path"`
+	PipelineHash      string                 `json:"pipeline_hash"`
+	RiskScore         float64                `json:"risk_score"`
+	RiskLevel         string                 `json:"risk_level"`
+	ConfidenceScore   float64                `json:"confidence_score"`
+	TextMode          string                 `json:"text_mode"`
+	MaxLength         int                    `json:"max_length"`
+	ReactionCountUsed int                    `json:"reaction_count_used"`
+	FeaturePayload    map[string]interface{} `json:"feature_payload"`
+	Evidence          []string               `json:"evidence"`
+	ModelInfo         map[string]interface{} `json:"model_info"`
+}
+
 func (c *MLClient) AnalyzeText(postID int64, content string, accountID int64,
 	username string, publishedAt time.Time,
 	followersCount int, accountCreatedAt time.Time) (*MLResponse, error) {
@@ -180,6 +196,36 @@ func (c *MLClient) AnalyzeCase(req CaseMLRequest) (*CaseMLResponse, error) {
 	var mlResp CaseMLResponse
 	if err := json.NewDecoder(resp.Body).Decode(&mlResp); err != nil {
 		return nil, fmt.Errorf("decode case response: %w", err)
+	}
+
+	return &mlResp, nil
+}
+
+// AnalyzeCaseText выполняет text-transformer case-level анализ через ML сервис.
+func (c *MLClient) AnalyzeCaseText(req CaseMLRequest) (*CaseTextMLResponse, error) {
+	reqBody, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("marshal case text request: %w", err)
+	}
+
+	resp, err := c.httpClient.Post(
+		c.mlURL+"/analyze/case-text",
+		"application/json",
+		bytes.NewBuffer(reqBody),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("ml case text service request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, fmt.Errorf("ml case text service status: %d body=%s", resp.StatusCode, bytes.TrimSpace(body))
+	}
+
+	var mlResp CaseTextMLResponse
+	if err := json.NewDecoder(resp.Body).Decode(&mlResp); err != nil {
+		return nil, fmt.Errorf("decode case text response: %w", err)
 	}
 
 	return &mlResp, nil

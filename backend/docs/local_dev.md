@@ -111,3 +111,23 @@ Then:
 curl 'http://localhost:8080/api/ingestion/runs?limit=10'
 curl 'http://localhost:8080/api/analysis/summary?source_type=dataset&dataset_name=sample&dataset_split=dev'
 ```
+
+## 6. Case Model Scores
+
+The project keeps `case_scores` as the active score used by existing API/UI paths. Multiple model outputs are stored separately in `case_model_scores`.
+
+Run the ML case scorer for the transformer text model:
+
+```bash
+DATABASE_URL='postgres://postgres:password@localhost:5432/manipulation_detection?sslmode=disable' \
+ML_SERVICE_URL='http://localhost:8000' \
+CASE_SCORERS=text \
+SOURCE_NAME=pheme_large \
+DATASET_NAME=pheme \
+DATASET_SPLIT=eventcv_large \
+CASE_LIMIT=10 \
+ONLY_UNSCORED=true \
+go run ./cmd/case_ml_scorer
+```
+
+Use `CASE_SCORERS=feature,text` when both the explainable case model and the transformer text model should be computed in one run.

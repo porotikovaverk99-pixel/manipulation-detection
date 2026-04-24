@@ -70,6 +70,9 @@ func main() {
 		if err := db.SaveCaseScore(score); err != nil {
 			log.Fatalf("save score for case %d failed: %v", c.ID, err)
 		}
+		if err := db.SaveCaseModelScore(caseModelScore(c.ID, score)); err != nil {
+			log.Fatalf("save model score for case %d failed: %v", c.ID, err)
+		}
 		scored++
 		log.Printf("scored case=%d external_case_id=%s risk=%.3f level=%s", c.ID, c.ExternalCaseID, score.RiskScore, score.RiskLevel)
 	}
@@ -342,6 +345,35 @@ func containsAny(text string, markers []string) bool {
 		}
 	}
 	return false
+}
+
+func caseModelScore(caseID int64, score repository.CaseScoreRecord) repository.CaseModelScoreRecord {
+	return repository.CaseModelScoreRecord{
+		CaseID:            caseID,
+		ScorerKey:         getenvDefault("CASE_FEATURE_SCORER_KEY", "case_feature"),
+		ModelVersion:      score.ScoreVersion,
+		RiskScore:         score.RiskScore,
+		RiskLevel:         score.RiskLevel,
+		TemporalScore:     floatPtr(score.TemporalScore),
+		CoordinationScore: floatPtr(score.CoordinationScore),
+		ContentScore:      floatPtr(score.ContentScore),
+		Evidence:          append([]string(nil), score.Evidence...),
+		FeaturePayload: map[string]interface{}{
+			"scoring_source":     "go_case_scorer",
+			"active_case_score":  true,
+			"confidence_present": false,
+		},
+		ModelInfo: map[string]interface{}{
+			"type":    "go_heuristic_case_baseline",
+			"trained": false,
+		},
+		PipelineHash:   score.PipelineHash,
+		SourceEndpoint: "cmd/case_scorer",
+	}
+}
+
+func floatPtr(value float64) *float64 {
+	return &value
 }
 
 func computePipelineHash(featureVersion, scoreVersion string) string {

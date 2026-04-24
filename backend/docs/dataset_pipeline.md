@@ -140,7 +140,8 @@ go run ./cmd/case_scorer
 - загружает связанные `posts`;
 - считает baseline case features;
 - сохраняет `case_features`;
-- сохраняет `case_scores`.
+- сохраняет активный score в `case_scores`;
+- сохраняет тот же model-specific score в `case_model_scores` с ключом `case_feature`.
 
 ### 6.2 ML case scorer
 
@@ -174,8 +175,37 @@ go run ./cmd/case_ml_scorer
 - загружает связанные `posts`;
 - отправляет case в `POST /analyze/case`;
 - сохраняет `case_features`;
-- сохраняет `case_scores`;
+- сохраняет активный explainable score в `case_scores`;
+- сохраняет model-specific score в `case_model_scores`;
 - пишет в `feature_payload.scoring_source = ml_service`.
+
+По умолчанию `cmd/case_ml_scorer` запускает только explainable feature scorer:
+
+```bash
+CASE_SCORERS=feature
+```
+
+Для transformer text score нужен ML service с `PHEME_TRANSFORMER_MODEL_PATH`, затем:
+
+```bash
+DATABASE_URL='postgres://postgres:password@localhost:5432/manipulation_detection?sslmode=disable' \
+ML_SERVICE_URL='http://127.0.0.1:8000' \
+CASE_SCORERS=text \
+DATASET_NAME=pheme \
+DATASET_SPLIT=eventcv_large \
+SOURCE_NAME=pheme_large \
+CASE_LIMIT=50 \
+ONLY_UNSCORED=true \
+go run ./cmd/case_ml_scorer
+```
+
+Поддерживаемые значения:
+
+- `CASE_SCORERS=feature` - вызывает `POST /analyze/case`, пишет `case_feature`;
+- `CASE_SCORERS=text` - вызывает `POST /analyze/case-text`, пишет `pheme_transformer_text`;
+- `CASE_SCORERS=feature,text` или `CASE_SCORERS=all` - запускает оба scorer-а.
+
+`ONLY_UNSCORED=true` теперь учитывает выбранные `case_model_scores`: например, для `CASE_SCORERS=text` будут выбраны cases, где ещё нет `pheme_transformer_text`.
 
 `/analyze/case` теперь работает в двух режимах:
 
