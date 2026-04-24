@@ -341,6 +341,70 @@ The next engineering step is no longer single-model tuning. It is model comparis
 - transformer text score;
 - optional ensemble score.
 
+## Case Model Scores And Ensemble
+
+Two utility scripts now connect offline evaluation artifacts with the shared `case_model_scores` table.
+
+Import OOF predictions:
+
+```bash
+DATABASE_URL='postgresql://postgres:password@localhost:5432/manipulation_detection' \
+ml/.venv/bin/python ml/src/import_case_model_scores.py \
+  --predictions-csv /home/richt/Documents/coding/cursor_fun/dplm_tst/evaluation_outputs/case_detector_run6_richer_large/case_detector_oof_predictions.csv \
+  --metrics-json /home/richt/Documents/coding/cursor_fun/dplm_tst/evaluation_outputs/case_detector_run6_richer_large/case_detector_metrics.json \
+  --scorer-key case_logreg_oof \
+  --source-endpoint offline_oof_import/logreg
+
+DATABASE_URL='postgresql://postgres:password@localhost:5432/manipulation_detection' \
+ml/.venv/bin/python ml/src/import_case_model_scores.py \
+  --predictions-csv /home/richt/Documents/coding/cursor_fun/dplm_tst/evaluation_outputs/case_boosting_lightgbm_run1/case_boosting_oof_predictions.csv \
+  --metrics-json /home/richt/Documents/coding/cursor_fun/dplm_tst/evaluation_outputs/case_boosting_lightgbm_run1/case_boosting_detector_metrics.json \
+  --scorer-key case_lightgbm_oof \
+  --source-endpoint offline_oof_import/lightgbm
+
+DATABASE_URL='postgresql://postgres:password@localhost:5432/manipulation_detection' \
+ml/.venv/bin/python ml/src/import_case_model_scores.py \
+  --predictions-csv /home/richt/Documents/coding/cursor_fun/dplm_tst/evaluation_outputs/pheme_transformer_root_reactions_run1/pheme_transformer_oof_predictions.csv \
+  --metrics-json /home/richt/Documents/coding/cursor_fun/dplm_tst/evaluation_outputs/pheme_transformer_root_reactions_run1/pheme_transformer_metrics.json \
+  --scorer-key pheme_transformer_text_oof \
+  --source-endpoint offline_oof_import/pheme_transformer
+```
+
+Compare scores and write a weighted ensemble:
+
+```bash
+DATABASE_URL='postgresql://postgres:password@localhost:5432/manipulation_detection' \
+ml/.venv/bin/python ml/src/compare_case_model_scores.py \
+  --weights 'case_logreg_oof=0,case_lightgbm_oof=0.35,pheme_transformer_text_oof=0.65' \
+  --output-dir /home/richt/Documents/coding/cursor_fun/dplm_tst/evaluation_outputs/case_model_score_comparison_run1 \
+  --write-ensemble
+```
+
+Rows imported into `case_model_scores`:
+
+| scorer_key | model_version | rows |
+|---|---|---:|
+| `case_logreg_oof` | `case-logreg-v6-richer-large` | `1000` |
+| `case_lightgbm_oof` | `case-lightgbm-v1` | `1000` |
+| `pheme_transformer_text_oof` | `pheme-distilroberta-root-reactions-v1` | `1000` |
+| `case_ensemble_v1` | `case-ensemble-v1` | `1000` |
+
+Comparison on `PHEME / pheme_large / eventcv_large`:
+
+| scorer_key | Precision@10 | Precision@20 | F1 | ROC-AUC | PR-AUC |
+|---|---:|---:|---:|---:|---:|
+| `case_logreg_oof` | `0.800` | `0.750` | `0.667` | `0.633` | `0.641` |
+| `case_lightgbm_oof` | `0.900` | `0.900` | `0.667` | `0.629` | `0.647` |
+| `pheme_transformer_text_oof` | `0.900` | `0.850` | `0.765` | `0.821` | `0.787` |
+| `case_ensemble_v1` | `0.900` | `0.950` | `0.766` | `0.814` | `0.805` |
+
+Interpretation:
+
+- the transformer remains the strongest standalone detector;
+- LightGBM is useful for top-K ranking despite weak global separation;
+- logistic regression remains the interpretable baseline, but its weight is `0` in `case_ensemble_v1` because it dilutes ranking quality;
+- `case_ensemble_v1` is best framed as a triage/ranking score: it improves `Precision@20` and `PR-AUC`, while ROC-AUC stays slightly below the transformer alone.
+
 ## Runtime Usage
 
 The saved PHEME transformer can now be used outside the training script.
