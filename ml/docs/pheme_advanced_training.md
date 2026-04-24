@@ -152,6 +152,41 @@ The recommended main scientific result can now be framed as:
 
 > A unified case-level pipeline where interpretable engineered features provide evidence cards, and a transformer text model improves event-level predictive performance.
 
+## Longer DistilRoBERTa Check
+
+We also tested whether the same `root_reactions` setup improves with more epochs:
+
+```text
+model_version = pheme-distilroberta-root-reactions-v2-5epochs
+epochs = 5
+learning_rate = 1e-5
+max_reactions = 8
+max_length = 192
+output = /workspace/evaluation_outputs/pheme_transformer_root_reactions_5epochs_run1
+```
+
+Observed result:
+
+- Precision@10: `0.900`;
+- Precision@20: `0.800`;
+- F1: `0.741`;
+- ROC-AUC: `0.791`;
+- PR-AUC: `0.764`;
+- training seconds: `622.1`.
+
+This is worse than the 3-epoch `pheme-distilroberta-root-reactions-v1` run:
+
+- Precision@20 dropped from `0.850` to `0.800`;
+- F1 dropped from `0.765` to `0.741`;
+- ROC-AUC dropped from `0.821` to `0.791`;
+- PR-AUC dropped from `0.787` to `0.764`.
+
+Conclusion:
+
+- simple longer fine-tuning is not the right improvement path for PHEME;
+- keep `pheme-distilroberta-root-reactions-v1` as the current best text model;
+- next useful neural checks are `root_only` control, longer context (`max_length=256/384`), or a stronger encoder such as `roberta-base` / `deberta-v3-small`.
+
 ## Runtime Usage
 
 The saved PHEME transformer can now be used outside the training script.
