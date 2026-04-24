@@ -187,6 +187,59 @@ Conclusion:
 - keep `pheme-distilroberta-root-reactions-v1` as the current best text model;
 - next useful neural checks are `root_only` control, longer context (`max_length=256/384`), or a stronger encoder such as `roberta-base` / `deberta-v3-small`.
 
+## RoBERTa-base Check
+
+We also tested a stronger encoder with the same text construction and validation protocol:
+
+```text
+model_version = pheme-roberta-base-root-reactions-v1
+base_model = roberta-base
+epochs = 3
+learning_rate = 2e-5
+max_reactions = 8
+max_length = 192
+batch_size = 16
+output = /workspace/evaluation_outputs/pheme_roberta_base_root_reactions_run1
+```
+
+Observed result:
+
+- device: `AMD Radeon RX 7800 XT` through ROCm Docker;
+- rows: `1000`;
+- evaluated rows: `1000`;
+- Precision@10: `0.800`;
+- Precision@20: `0.750`;
+- Precision: `0.726`;
+- Recall: `0.794`;
+- F1: `0.758`;
+- ROC-AUC: `0.812`;
+- PR-AUC: `0.775`;
+- training seconds: `781.1`.
+
+Comparison with the current best DistilRoBERTa run:
+
+| Model | Precision@10 | Precision@20 | Precision | Recall | F1 | ROC-AUC | PR-AUC | Training seconds |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `pheme-distilroberta-root-reactions-v1` | `0.900` | `0.850` | `0.712` | `0.826` | `0.765` | `0.821` | `0.787` | `378.3` |
+| `pheme-roberta-base-root-reactions-v1` | `0.800` | `0.750` | `0.726` | `0.794` | `0.758` | `0.812` | `0.775` | `781.1` |
+
+Event-level result:
+
+| Held-out event | F1 | ROC-AUC | PR-AUC |
+|---|---:|---:|---:|
+| `charliehebdo` | `0.857` | `0.869` | `0.838` |
+| `ferguson` | `0.490` | `0.821` | `0.756` |
+| `germanwings-crash` | `0.734` | `0.765` | `0.747` |
+| `ottawashooting` | `0.821` | `0.873` | `0.878` |
+| `sydneysiege` | `0.779` | `0.852` | `0.795` |
+
+Conclusion:
+
+- RoBERTa-base trained successfully on the RX 7800 XT through ROCm;
+- it did not beat the lighter DistilRoBERTa model on the main quality metrics;
+- the result supports keeping `pheme-distilroberta-root-reactions-v1` as the default runtime text model;
+- for the next neural step, prefer richer input/context checks over simply increasing model size.
+
 ## Runtime Usage
 
 The saved PHEME transformer can now be used outside the training script.
