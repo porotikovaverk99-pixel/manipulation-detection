@@ -51,16 +51,25 @@ type MLResponse struct {
 
 // CaseMLPost представляет один пост внутри case-level ML запроса.
 type CaseMLPost struct {
-	PostID        int64    `json:"post_id"`
-	ExternalID    string   `json:"external_id"`
-	AccountID     int64    `json:"account_id"`
-	Username      string   `json:"username"`
-	PublishedAt   string   `json:"published_at"`
-	Content       string   `json:"content"`
-	IsCaseRoot    bool     `json:"is_case_root"`
-	ReplyToPostID *int64   `json:"reply_to_post_id,omitempty"`
-	Tags          []string `json:"tags"`
-	Links         []string `json:"links"`
+	PostID           int64    `json:"post_id"`
+	ExternalID       string   `json:"external_id"`
+	AccountID        int64    `json:"account_id"`
+	Username         string   `json:"username"`
+	PublishedAt      string   `json:"published_at"`
+	Content          string   `json:"content"`
+	IsCaseRoot       bool     `json:"is_case_root"`
+	ReplyToPostID    *int64   `json:"reply_to_post_id,omitempty"`
+	LikesCount       int      `json:"likes_count"`
+	RepostsCount     int      `json:"reposts_count"`
+	RepliesCount     int      `json:"replies_count"`
+	FollowersCount   int      `json:"followers_count"`
+	FollowingCount   int      `json:"following_count"`
+	PostsCount       int      `json:"posts_count"`
+	IsVerified       bool     `json:"is_verified"`
+	AccountCreatedAt string   `json:"account_created_at,omitempty"`
+	AccountURL       string   `json:"account_url,omitempty"`
+	Tags             []string `json:"tags"`
+	Links            []string `json:"links"`
 }
 
 // CaseMLRequest представляет case-level запрос к ML сервису.

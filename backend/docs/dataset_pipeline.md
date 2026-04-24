@@ -177,7 +177,54 @@ go run ./cmd/case_ml_scorer
 - сохраняет `case_scores`;
 - пишет в `feature_payload.scoring_source = ml_service`.
 
-Текущая реализация `/analyze/case` пока использует прозрачный heuristic baseline, но уже живёт в Python ML service. Это даёт стабильную точку для следующего шага: заменить или откалибровать scorer без переписывания backend pipeline.
+`/analyze/case` теперь работает в двух режимах:
+
+- по умолчанию - прозрачный heuristic baseline;
+- если задан `CASE_MODEL_PATH` - обученная case-level модель (`case-logreg-v1`).
+
+Это позволяет не переписывать backend pipeline при переходе от baseline к supervised scoring.
+
+Текущий основной feature extractor:
+
+- `case-features-ml-v4`;
+- добавляет thread/case-level признаки по временным окнам, peak activity, reply-tree shape, root/reaction similarity, reaction markers и lexical diversity.
+
+Текущий предпочтительный trained artifact для основного PHEME-трека:
+
+- `evaluation_outputs/case_detector_run4_richer/case_detector_model.pkl`
+
+Почему именно он:
+
+- лучше `case-logreg-v1` по `ROC-AUC`, `PR-AUC` и `Precision@20`;
+- лучше, чем вариант `richer + portable account-risk`, если account-risk не считать главным треком.
+
+Тренировка первой case-level модели:
+
+```bash
+cd ../ml
+
+DATABASE_URL='postgresql://postgres:password@localhost:5432/manipulation_detection' \
+CASE_MODEL_OUTPUT_DIR='/absolute/path/to/evaluation_outputs/case_detector_run1' \
+CASE_DATASET_NAME='pheme' \
+CASE_DATASET_SPLITS='eventcv' \
+CASE_SOURCE_NAME='pheme' \
+.venv/bin/python src/train_case_detector.py
+```
+
+Артефакты:
+
+- `case_detector_model.pkl`
+- `case_detector_metrics.json`
+- `case_training_dataset_sample.csv`
+- `case_detector_oof_predictions.csv`
+
+Runtime c обученной моделью:
+
+```bash
+CASE_MODEL_PATH='/absolute/path/to/case_detector_model.pkl' \
+PYTHONPATH=src \
+.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000
+```
 
 ## 7. API inspection
 
@@ -296,3 +343,28 @@ curl -X POST http://127.0.0.1:8000/analyze/bot-account \
 ```
 
 Этот трек пока живёт отдельно от case scorer. Следующий шаг - добавить `bot_score` как дополнительный signal в case-level features.
+
+Обновление:
+
+- `bot_score` уже протянут в case-level feature extraction;
+- `case_ml_scorer` теперь передает расширенные account-level поля по авторам кейса;
+- `/analyze/case` при наличии `BOT_MODEL_PATH` добавляет в `feature_payload` агрегаты `bot_score_mean`, `bot_score_max`, `bot_high_share`, `root_author_bot_score`.
+
+Дальше можно переобучить case-level модель уже на bot-aware признаках:
+
+```bash
+cd ../ml
+
+DATABASE_URL='postgresql://postgres:password@localhost:5432/manipulation_detection' \
+CASE_MODEL_OUTPUT_DIR='/absolute/path/to/evaluation_outputs/case_detector_run2_bot' \
+CASE_MODEL_VERSION='case-logreg-v2-bot' \
+CASE_DATASET_NAME='pheme' \
+CASE_DATASET_SPLITS='eventcv' \
+CASE_SOURCE_NAME='pheme' \
+.venv/bin/python src/train_case_detector.py
+```
+
+Практическое ограничение текущего шага:
+
+- `Cresci-2017` bot model на `PHEME` даёт почти saturated bot scores;
+- это означает domain shift и требует отдельной калибровки/перепроверки, прежде чем использовать bot signal как сильный научный аргумент.

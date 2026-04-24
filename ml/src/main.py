@@ -11,6 +11,7 @@ from db_integration import DatabaseConnector
 from analyzer import ManipulationAnalyzer
 from case_analyzer import CaseManipulationAnalyzer
 from bot_analyzer import BotAccountAnalyzer
+from trained_case_analyzer import TrainedCaseAnalyzer
 
 # Глобальные переменные для хранения ресурсов
 db_connector = None
@@ -18,12 +19,13 @@ advanced_analyzer = None
 simple_analyzer = None
 case_analyzer = None
 bot_analyzer = None
+case_analyzer_mode = "unavailable"
 save_analysis_results = False
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: выполняется ПЕРЕД запуском приложения
-    global db_connector, advanced_analyzer, simple_analyzer, case_analyzer, bot_analyzer, save_analysis_results
+    global db_connector, advanced_analyzer, simple_analyzer, case_analyzer, bot_analyzer, case_analyzer_mode, save_analysis_results
     
     print("🚀 Starting ML Service...")
     save_analysis_results = os.getenv("ML_SAVE_ANALYSIS_RESULTS", "false").lower() == "true"
@@ -48,7 +50,6 @@ async def lifespan(app: FastAPI):
         backend_url="http://localhost:8080"
     )
     simple_analyzer = ManipulationAnalyzer()
-    case_analyzer = CaseManipulationAnalyzer()
     bot_model_path = os.getenv("BOT_MODEL_PATH", "").strip()
     if bot_model_path:
         try:
@@ -59,6 +60,18 @@ async def lifespan(app: FastAPI):
             bot_analyzer = None
     else:
         bot_analyzer = None
+    case_analyzer = CaseManipulationAnalyzer(bot_analyzer=bot_analyzer)
+    case_analyzer_mode = "heuristic"
+    case_model_path = os.getenv("CASE_MODEL_PATH", "").strip()
+    if case_model_path:
+        try:
+            case_analyzer = TrainedCaseAnalyzer(case_model_path, bot_analyzer=bot_analyzer)
+            case_analyzer_mode = "trained"
+            print(f"✅ Trained case analyzer loaded from {case_model_path}")
+        except Exception as exc:
+            print(f"⚠️ Trained case analyzer unavailable, using heuristic fallback: {exc}")
+            case_analyzer = CaseManipulationAnalyzer(bot_analyzer=bot_analyzer)
+            case_analyzer_mode = "heuristic"
     print("✅ Analyzers initialized")
     
     yield  # Здесь приложение работает и обрабатывает запросы
@@ -112,6 +125,15 @@ class CasePostRequest(BaseModel):
     content: str
     is_case_root: bool = False
     reply_to_post_id: Optional[int] = None
+    likes_count: int = 0
+    reposts_count: int = 0
+    replies_count: int = 0
+    followers_count: int = 0
+    following_count: int = 0
+    posts_count: int = 0
+    is_verified: bool = False
+    account_created_at: Optional[str] = None
+    account_url: Optional[str] = None
     tags: List[str] = Field(default_factory=list)
     links: List[str] = Field(default_factory=list)
 
@@ -203,7 +225,8 @@ async def health():
             "simple": simple_analyzer is not None,
             "case": case_analyzer is not None,
             "bot": bot_analyzer is not None
-        }
+        },
+        "case_mode": case_analyzer_mode,
     }
 
 @app.post("/predict")

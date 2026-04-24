@@ -20,7 +20,8 @@ class BotAccountAnalyzer:
         self.pipeline = bundle["pipeline"]
         self.feature_columns = bundle["feature_columns"]
         self.dataset_summary = bundle.get("dataset_summary", [])
-        self.model_version = "bot-logreg-v1"
+        self.model_version = bundle.get("model_version", "bot-logreg-v1")
+        self.feature_profile = bundle.get("feature_profile", "full")
         self.model_path = str(bundle_path)
 
     def analyze_account(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -40,7 +41,10 @@ class BotAccountAnalyzer:
             "model_path": self.model_path,
             "bot_score": round(bot_score, 6),
             "predicted_label": predicted_label,
-            "feature_payload": {key: self._json_value(value) for key, value in features.items()},
+            "feature_payload": {
+                **{key: self._json_value(value) for key, value in features.items()},
+                "feature_profile": self.feature_profile,
+            },
             "top_contributors": top_contributors,
         }
 

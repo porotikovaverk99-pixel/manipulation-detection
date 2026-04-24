@@ -157,15 +157,26 @@ func buildCaseMLRequest(c repository.CaseForScoring) collector.CaseMLRequest {
 
 	for _, post := range c.Posts {
 		reqPost := collector.CaseMLPost{
-			PostID:      post.ID,
-			ExternalID:  post.ExternalID,
-			AccountID:   post.AccountID,
-			Username:    post.Username,
-			PublishedAt: post.PublishedAt.UTC().Format(time.RFC3339),
-			Content:     post.Content,
-			IsCaseRoot:  post.IsCaseRoot,
-			Tags:        cloneStrings(post.Tags),
-			Links:       cloneStrings(post.Links),
+			PostID:         post.ID,
+			ExternalID:     post.ExternalID,
+			AccountID:      post.AccountID,
+			Username:       post.Username,
+			PublishedAt:    post.PublishedAt.UTC().Format(time.RFC3339),
+			Content:        post.Content,
+			IsCaseRoot:     post.IsCaseRoot,
+			LikesCount:     post.LikesCount,
+			RepostsCount:   post.RepostsCount,
+			RepliesCount:   post.RepliesCount,
+			FollowersCount: post.FollowersCount,
+			FollowingCount: post.FollowingCount,
+			PostsCount:     post.PostsCount,
+			IsVerified:     post.IsVerified,
+			AccountURL:     post.AccountURL,
+			Tags:           cloneStrings(post.Tags),
+			Links:          cloneStrings(post.Links),
+		}
+		if post.AccountCreatedAt != nil {
+			reqPost.AccountCreatedAt = post.AccountCreatedAt.UTC().Format(time.RFC3339)
 		}
 		if post.ReplyToPostID != nil {
 			replyID := *post.ReplyToPostID

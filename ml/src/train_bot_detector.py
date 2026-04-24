@@ -1,11 +1,12 @@
 import io
+import gzip
 import json
 import math
 import pickle
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, Iterable, List, Tuple
 
 import numpy as np
 import pandas as pd
@@ -28,6 +29,9 @@ OUTER_SUBSETS = [
     ("traditional_spambots_3", 1),
     ("traditional_spambots_4", 1),
 ]
+
+DATASET_SOURCE_CRESCI = "cresci-2017"
+DATASET_SOURCE_FOX8 = "fox8-23"
 
 USER_COLUMNS = [
     "id",
@@ -62,11 +66,40 @@ TWEET_COLUMNS = [
     "num_mentions",
 ]
 
+FEATURE_PROFILE_FULL = "full"
+FEATURE_PROFILE_PORTABLE_CORE = "portable_core"
+
+PORTABLE_CORE_FEATURE_COLUMNS = [
+    "statuses_count",
+    "followers_count",
+    "friends_count",
+    "followers_friends_ratio",
+    "has_description",
+    "has_url",
+    "has_location",
+    "verified",
+    "account_age_days",
+    "tweet_count",
+    "avg_num_hashtags",
+    "avg_num_urls",
+    "avg_num_mentions",
+    "retweet_post_ratio",
+    "reply_post_ratio",
+    "hashtag_tweet_ratio",
+    "url_tweet_ratio",
+    "mention_tweet_ratio",
+    "text_duplication_ratio",
+]
+
 
 @dataclass
 class BuildConfig:
-    outer_zip_path: Path
+    outer_zip_path: Path | None
+    fox8_path: Path | None
     output_dir: Path
+    dataset_sources: List[str]
+    feature_profile: str = FEATURE_PROFILE_FULL
+    model_version: str = "bot-logreg-v1"
     max_users_per_subset: int = 1000
     chunk_size: int = 50000
     random_seed: int = 42
@@ -74,10 +107,16 @@ class BuildConfig:
 
 def main() -> None:
     config = BuildConfig(
-        outer_zip_path=Path(
+        outer_zip_path=optional_path(
             getenv(
                 "CRESCI_ZIP_PATH",
                 "/home/richt/Documents/coding/cursor_fun/dplm_tst/datasets/raw/bots/cresci-2017.csv.zip",
+            )
+        ),
+        fox8_path=optional_path(
+            getenv(
+                "FOX8_PATH",
+                "/home/richt/Documents/coding/cursor_fun/dplm_tst/datasets/raw/bots/fox8-23.ndjson.gz",
             )
         ),
         output_dir=Path(
@@ -86,6 +125,9 @@ def main() -> None:
                 "/home/richt/Documents/coding/cursor_fun/dplm_tst/evaluation_outputs/bot_detector",
             )
         ),
+        dataset_sources=normalize_dataset_sources(getenv("ACCOUNT_DATASETS", DATASET_SOURCE_CRESCI)),
+        feature_profile=normalize_feature_profile(getenv("BOT_FEATURE_PROFILE", FEATURE_PROFILE_FULL)),
+        model_version=getenv("BOT_MODEL_VERSION", "bot-logreg-v1"),
         max_users_per_subset=getenv_int("MAX_USERS_PER_SUBSET", 1000),
         chunk_size=getenv_int("TWEET_CHUNK_SIZE", 50000),
         random_seed=getenv_int("BOT_RANDOM_SEED", 42),
@@ -106,19 +148,16 @@ def main() -> None:
         stratify=y,
     )
 
-    pipeline = Pipeline(
-        steps=[
-            ("imputer", SimpleImputer(strategy="median")),
-            ("scaler", StandardScaler()),
-            ("model", LogisticRegression(max_iter=2000, class_weight="balanced")),
-        ]
-    )
+    pipeline = build_pipeline()
     pipeline.fit(X_train, y_train)
 
     y_pred = pipeline.predict(X_test)
     y_score = pipeline.predict_proba(X_test)[:, 1]
 
     metrics = {
+        "model_version": config.model_version,
+        "dataset_sources": config.dataset_sources,
+        "feature_profile": config.feature_profile,
         "train_rows": int(len(X_train)),
         "test_rows": int(len(X_test)),
         "feature_count": len(feature_columns),
@@ -130,13 +169,15 @@ def main() -> None:
         "classification_report": classification_report(y_test, y_pred, output_dict=True, zero_division=0),
         "dataset_summary": dataset_summary,
     }
+    if len(set(df["dataset_source"])) > 1:
+        metrics["cross_dataset"] = evaluate_cross_dataset(df, feature_columns)
 
     metrics_path = config.output_dir / "bot_detector_metrics.json"
     model_path = config.output_dir / "bot_detector_model.pkl"
     dataset_path = config.output_dir / "bot_training_dataset_sample.csv"
 
     metrics_path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
-    dataset_preview = df[["user_id", "subset_name", "label"] + feature_columns].head(500)
+    dataset_preview = df[["user_id", "dataset_source", "subset_name", "label"] + feature_columns].head(500)
     dataset_preview.to_csv(dataset_path, index=False)
     with model_path.open("wb") as fh:
         pickle.dump(
@@ -144,6 +185,8 @@ def main() -> None:
                 "pipeline": pipeline,
                 "feature_columns": feature_columns,
                 "dataset_summary": dataset_summary,
+                "feature_profile": config.feature_profile,
+                "model_version": config.model_version,
             },
             fh,
         )
@@ -157,6 +200,7 @@ def main() -> None:
             "recall": metrics["recall"],
             "f1": metrics["f1"],
             "roc_auc": metrics["roc_auc"],
+            "feature_profile": config.feature_profile,
             "rows": len(df),
         },
         indent=2,
@@ -166,6 +210,39 @@ def main() -> None:
 def build_training_frame(config: BuildConfig) -> Tuple[pd.DataFrame, List[str], List[Dict[str, object]]]:
     frames: List[pd.DataFrame] = []
     dataset_summary: List[Dict[str, object]] = []
+
+    if DATASET_SOURCE_CRESCI in config.dataset_sources:
+        if config.outer_zip_path is None or not config.outer_zip_path.exists():
+            raise FileNotFoundError(f"cresci archive not found: {config.outer_zip_path}")
+        cresci_frames, cresci_summary = build_cresci_training_frames(config)
+        frames.extend(cresci_frames)
+        dataset_summary.extend(cresci_summary)
+
+    if DATASET_SOURCE_FOX8 in config.dataset_sources:
+        if config.fox8_path is None or not config.fox8_path.exists():
+            raise FileNotFoundError(f"fox8 archive not found: {config.fox8_path}")
+        fox8_frames, fox8_summary = build_fox8_training_frames(config)
+        frames.extend(fox8_frames)
+        dataset_summary.extend(fox8_summary)
+
+    if not frames:
+        return pd.DataFrame(), [], dataset_summary
+
+    full_df = pd.concat(frames, ignore_index=True)
+    feature_columns = [
+        column
+        for column in full_df.columns
+        if column not in {"user_id", "label", "subset_name", "dataset_source"}
+    ]
+    feature_columns = select_feature_columns(feature_columns, config.feature_profile)
+    full_df[feature_columns] = full_df[feature_columns].replace([np.inf, -np.inf], np.nan)
+    return full_df, feature_columns, dataset_summary
+
+
+def build_cresci_training_frames(config: BuildConfig) -> Tuple[List[pd.DataFrame], List[Dict[str, object]]]:
+    frames: List[pd.DataFrame] = []
+    dataset_summary: List[Dict[str, object]] = []
+    assert config.outer_zip_path is not None
 
     with zipfile.ZipFile(config.outer_zip_path) as outer_zip:
         for subset_name, label in OUTER_SUBSETS:
@@ -189,10 +266,12 @@ def build_training_frame(config: BuildConfig) -> Tuple[pd.DataFrame, List[str], 
             feature_df = build_account_features(users_df, tweets_df)
             feature_df["label"] = label
             feature_df["subset_name"] = subset_name
+            feature_df["dataset_source"] = DATASET_SOURCE_CRESCI
 
             frames.append(feature_df)
             dataset_summary.append(
                 {
+                    "dataset_source": DATASET_SOURCE_CRESCI,
                     "subset_name": subset_name,
                     "label": label,
                     "users_selected": int(len(users_df)),
@@ -200,22 +279,144 @@ def build_training_frame(config: BuildConfig) -> Tuple[pd.DataFrame, List[str], 
                 }
             )
 
-    if not frames:
-        return pd.DataFrame(), [], dataset_summary
+    return frames, dataset_summary
 
-    full_df = pd.concat(frames, ignore_index=True)
-    feature_columns = [
-        column
-        for column in full_df.columns
-        if column not in {"user_id", "label", "subset_name"}
-    ]
-    full_df[feature_columns] = full_df[feature_columns].replace([np.inf, -np.inf], np.nan)
-    return full_df, feature_columns, dataset_summary
+
+def build_fox8_training_frames(config: BuildConfig) -> Tuple[List[pd.DataFrame], List[Dict[str, object]]]:
+    rows = load_fox8_rows(config.fox8_path)
+    frames: List[pd.DataFrame] = []
+    dataset_summary: List[Dict[str, object]] = []
+
+    for subset_name, subset_rows in rows.items():
+        label = subset_rows[0]["label"]
+        sample_size = min(len(subset_rows), config.max_users_per_subset)
+        if sample_size < len(subset_rows):
+            rng = np.random.default_rng(config.random_seed)
+            indices = rng.choice(len(subset_rows), size=sample_size, replace=False)
+            selected_rows = [subset_rows[index] for index in sorted(indices)]
+        else:
+            selected_rows = subset_rows
+
+        users_df = pd.DataFrame([row["user"] for row in selected_rows], columns=USER_COLUMNS)
+        tweets_df = pd.DataFrame(
+            [tweet for row in selected_rows for tweet in row["tweets"]],
+            columns=TWEET_COLUMNS,
+        )
+        feature_df = build_account_features(users_df, tweets_df)
+        feature_df["label"] = label
+        feature_df["subset_name"] = subset_name
+        feature_df["dataset_source"] = DATASET_SOURCE_FOX8
+
+        frames.append(feature_df)
+        dataset_summary.append(
+            {
+                "dataset_source": DATASET_SOURCE_FOX8,
+                "subset_name": subset_name,
+                "label": label,
+                "users_selected": int(len(users_df)),
+                "tweets_selected": int(len(tweets_df)),
+            }
+        )
+
+    return frames, dataset_summary
 
 
 def load_nested_zip(outer_zip: zipfile.ZipFile, outer_member: str) -> zipfile.ZipFile:
     payload = outer_zip.read(outer_member)
     return zipfile.ZipFile(io.BytesIO(payload))
+
+
+def load_fox8_rows(path: Path | None) -> Dict[str, List[Dict[str, object]]]:
+    if path is None:
+        return {}
+
+    grouped: Dict[str, List[Dict[str, object]]] = {}
+    with gzip.open(path, "rt", encoding="utf-8") as fh:
+        for line in fh:
+            raw = json.loads(line)
+            label_text = str(raw.get("label", "")).strip().lower()
+            if label_text not in {"bot", "human"}:
+                continue
+
+            user_id = str(raw.get("user_id", "")).strip()
+            if not user_id:
+                continue
+
+            tweets = raw.get("user_tweets", []) or []
+            user_payload = first_user_payload(tweets)
+            user_row = build_fox8_user_row(user_id, user_payload, tweets)
+            tweet_rows = [build_fox8_tweet_row(user_id, tweet) for tweet in tweets]
+
+            subset_name = str(raw.get("dataset", "unknown")).strip() or "unknown"
+            grouped.setdefault(subset_name, []).append(
+                {
+                    "label": 1 if label_text == "bot" else 0,
+                    "user": user_row,
+                    "tweets": tweet_rows,
+                }
+            )
+    return grouped
+
+
+def first_user_payload(tweets: Iterable[Dict[str, object]]) -> Dict[str, object]:
+    for tweet in tweets:
+        user = tweet.get("user")
+        if isinstance(user, dict) and user:
+            return user
+    return {}
+
+
+def build_fox8_user_row(user_id: str, user_payload: Dict[str, object], tweets: List[Dict[str, object]]) -> Dict[str, object]:
+    latest_created_at = None
+    for tweet in tweets:
+        created_at = tweet.get("created_at")
+        if created_at:
+            latest_created_at = created_at
+            break
+
+    return {
+        "id": user_id,
+        "statuses_count": user_payload.get("statuses_count"),
+        "followers_count": user_payload.get("followers_count"),
+        "friends_count": user_payload.get("friends_count"),
+        "favourites_count": user_payload.get("favourites_count"),
+        "listed_count": user_payload.get("listed_count"),
+        "default_profile": user_payload.get("default_profile"),
+        "default_profile_image": user_payload.get("default_profile_image"),
+        "geo_enabled": user_payload.get("geo_enabled"),
+        "verified": user_payload.get("verified"),
+        "protected": user_payload.get("protected"),
+        "description": user_payload.get("description"),
+        "url": user_payload.get("url"),
+        "location": user_payload.get("location"),
+        "created_at": user_payload.get("created_at"),
+        "updated": latest_created_at or user_payload.get("created_at"),
+    }
+
+
+def build_fox8_tweet_row(user_id: str, tweet: Dict[str, object]) -> Dict[str, object]:
+    entities = tweet.get("entities") if isinstance(tweet.get("entities"), dict) else {}
+    retweeted_status = tweet.get("retweeted_status") if isinstance(tweet.get("retweeted_status"), dict) else {}
+
+    return {
+        "user_id": user_id,
+        "text": tweet.get("full_text") or tweet.get("text"),
+        "source": tweet.get("source"),
+        "in_reply_to_status_id": tweet.get("in_reply_to_status_id_str") or tweet.get("in_reply_to_status_id"),
+        "retweeted_status_id": retweeted_status.get("id_str") or retweeted_status.get("id"),
+        "retweet_count": tweet.get("retweet_count"),
+        "reply_count": tweet.get("reply_count"),
+        "favorite_count": tweet.get("favorite_count"),
+        "num_hashtags": count_entities(entities.get("hashtags")),
+        "num_urls": count_entities(entities.get("urls")),
+        "num_mentions": count_entities(entities.get("user_mentions")),
+    }
+
+
+def count_entities(value: object) -> float:
+    if isinstance(value, list):
+        return float(len(value))
+    return 0.0
 
 
 def load_users_frame(nested: zipfile.ZipFile, subset_name: str) -> pd.DataFrame:
@@ -300,10 +501,11 @@ def build_account_features(users_df: pd.DataFrame, tweets_df: pd.DataFrame) -> p
     for col in ["default_profile", "default_profile_image", "geo_enabled", "verified", "protected"]:
         base[col] = base[col].apply(to_bool_float)
 
-    created_at = pd.to_datetime(base["created_at"], errors="coerce", utc=True)
-    updated_at = pd.to_datetime(base["updated"], errors="coerce", utc=True)
+    created_at = pd.to_datetime(base["created_at"], errors="coerce", utc=True, format="mixed")
+    updated_at = pd.to_datetime(base["updated"], errors="coerce", utc=True, format="mixed")
     age_days = (updated_at - created_at).dt.total_seconds() / 86400.0
-    age_median = age_days.median()
+    valid_age_days = age_days.dropna()
+    age_median = valid_age_days.median() if not valid_age_days.empty else np.nan
     if pd.isna(age_median):
         age_median = 0.0
     base["account_age_days"] = age_days.fillna(age_median)
@@ -333,6 +535,8 @@ def build_account_features(users_df: pd.DataFrame, tweets_df: pd.DataFrame) -> p
     else:
         tweets = tweets_df.copy()
         tweets["text"] = tweets["text"].fillna("")
+        for col in ["num_hashtags", "num_urls", "num_mentions", "retweet_count", "reply_count", "favorite_count"]:
+            tweets[col] = pd.to_numeric(tweets[col], errors="coerce").fillna(0.0)
         tweets["text_norm"] = tweets["text"].str.lower().str.replace(r"\s+", " ", regex=True).str.strip()
         tweets["text_length"] = tweets["text"].str.len()
         tweets["is_retweet_post"] = tweets["retweeted_status_id"].apply(is_present).astype(float)
@@ -425,6 +629,92 @@ def getenv_int(key: str, fallback: int) -> int:
     except ValueError:
         return fallback
     return parsed if parsed > 0 else fallback
+
+
+def normalize_feature_profile(raw: str) -> str:
+    value = raw.strip().lower()
+    if value in {"core", FEATURE_PROFILE_PORTABLE_CORE}:
+        return FEATURE_PROFILE_PORTABLE_CORE
+    return FEATURE_PROFILE_FULL
+
+
+def select_feature_columns(feature_columns: List[str], profile: str) -> List[str]:
+    if profile == FEATURE_PROFILE_PORTABLE_CORE:
+        selected = [column for column in PORTABLE_CORE_FEATURE_COLUMNS if column in feature_columns]
+        if not selected:
+            raise RuntimeError("portable_core profile produced empty feature set")
+        return selected
+    return feature_columns
+
+
+def normalize_dataset_sources(raw: str) -> List[str]:
+    mapping = {
+        "cresci": DATASET_SOURCE_CRESCI,
+        DATASET_SOURCE_CRESCI: DATASET_SOURCE_CRESCI,
+        "fox8": DATASET_SOURCE_FOX8,
+        DATASET_SOURCE_FOX8: DATASET_SOURCE_FOX8,
+    }
+    selected: List[str] = []
+    for item in raw.split(","):
+        value = item.strip().lower()
+        if value == "":
+            continue
+        normalized = mapping.get(value)
+        if normalized is None:
+            continue
+        if normalized not in selected:
+            selected.append(normalized)
+    return selected or [DATASET_SOURCE_CRESCI]
+
+
+def optional_path(raw: str) -> Path | None:
+    value = raw.strip()
+    if value == "":
+        return None
+    return Path(value)
+
+
+def build_pipeline() -> Pipeline:
+    return Pipeline(
+        steps=[
+            ("imputer", SimpleImputer(strategy="median")),
+            ("scaler", StandardScaler()),
+            ("model", LogisticRegression(max_iter=2000, class_weight="balanced")),
+        ]
+    )
+
+
+def evaluate_cross_dataset(df: pd.DataFrame, feature_columns: List[str]) -> Dict[str, Dict[str, object]]:
+    results: Dict[str, Dict[str, object]] = {}
+    sources = sorted(str(value) for value in df["dataset_source"].dropna().unique())
+    for train_source in sources:
+        for test_source in sources:
+            if train_source == test_source:
+                continue
+            train_df = df[df["dataset_source"] == train_source]
+            test_df = df[df["dataset_source"] == test_source]
+            if train_df.empty or test_df.empty:
+                continue
+
+            pipeline = build_pipeline()
+            pipeline.fit(train_df[feature_columns], train_df["label"])
+
+            y_test = test_df["label"]
+            y_pred = pipeline.predict(test_df[feature_columns])
+            y_score = pipeline.predict_proba(test_df[feature_columns])[:, 1]
+
+            key = f"{train_source}__to__{test_source}"
+            results[key] = {
+                "train_source": train_source,
+                "test_source": test_source,
+                "train_rows": int(len(train_df)),
+                "test_rows": int(len(test_df)),
+                "precision": float(precision_score(y_test, y_pred, zero_division=0)),
+                "recall": float(recall_score(y_test, y_pred, zero_division=0)),
+                "f1": float(f1_score(y_test, y_pred, zero_division=0)),
+                "roc_auc": float(roc_auc_score(y_test, y_score)),
+            }
+    return results
 
 
 if __name__ == "__main__":

@@ -155,16 +155,25 @@ type CaseFilter struct {
 
 // CasePostData представляет посты, входящие в case.
 type CasePostData struct {
-	ID            int64
-	ExternalID    string
-	AccountID     int64
-	Username      string
-	PublishedAt   time.Time
-	Content       string
-	IsCaseRoot    bool
-	ReplyToPostID *int64
-	Tags          []string
-	Links         []string
+	ID               int64
+	ExternalID       string
+	AccountID        int64
+	Username         string
+	PublishedAt      time.Time
+	Content          string
+	IsCaseRoot       bool
+	ReplyToPostID    *int64
+	LikesCount       int
+	RepostsCount     int
+	RepliesCount     int
+	FollowersCount   int
+	FollowingCount   int
+	PostsCount       int
+	IsVerified       bool
+	AccountCreatedAt *time.Time
+	AccountURL       string
+	Tags             []string
+	Links            []string
 }
 
 // CaseForScoring представляет case и все его посты для расчета признаков.
@@ -1217,7 +1226,16 @@ func (p *PostgresDB) getCasePosts(caseID int64) ([]CasePostData, error) {
 			p.published_at,
 			p.content,
 			p.is_case_root,
-			p.reply_to_post_id
+			p.reply_to_post_id,
+			COALESCE(p.likes_count, 0),
+			COALESCE(p.reposts_count, 0),
+			COALESCE(p.replies_count, 0),
+			COALESCE(a.followers_count, 0),
+			COALESCE(a.following_count, 0),
+			COALESCE(a.posts_count, 0),
+			COALESCE(a.is_verified, FALSE),
+			a.created_at,
+			COALESCE(a.account_url, '')
 		FROM posts p
 		JOIN accounts a ON a.id = p.account_id
 		WHERE p.case_id = $1
@@ -1233,6 +1251,7 @@ func (p *PostgresDB) getCasePosts(caseID int64) ([]CasePostData, error) {
 	for rows.Next() {
 		var item CasePostData
 		var replyTo sql.NullInt64
+		var accountCreatedAt sql.NullTime
 		if err := rows.Scan(
 			&item.ID,
 			&item.ExternalID,
@@ -1242,12 +1261,25 @@ func (p *PostgresDB) getCasePosts(caseID int64) ([]CasePostData, error) {
 			&item.Content,
 			&item.IsCaseRoot,
 			&replyTo,
+			&item.LikesCount,
+			&item.RepostsCount,
+			&item.RepliesCount,
+			&item.FollowersCount,
+			&item.FollowingCount,
+			&item.PostsCount,
+			&item.IsVerified,
+			&accountCreatedAt,
+			&item.AccountURL,
 		); err != nil {
 			return nil, err
 		}
 		if replyTo.Valid {
 			value := replyTo.Int64
 			item.ReplyToPostID = &value
+		}
+		if accountCreatedAt.Valid {
+			value := accountCreatedAt.Time
+			item.AccountCreatedAt = &value
 		}
 		postIndex[item.ID] = len(posts)
 		posts = append(posts, item)
