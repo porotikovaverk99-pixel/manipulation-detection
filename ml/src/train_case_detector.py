@@ -145,6 +145,7 @@ def main() -> None:
 
     model_path = config.output_dir / "case_detector_model.pkl"
     metrics_path = config.output_dir / "case_detector_metrics.json"
+    full_dataset_path = config.output_dir / "case_training_dataset.csv"
     preview_path = config.output_dir / "case_training_dataset_sample.csv"
     oof_path = config.output_dir / "case_detector_oof_predictions.csv"
 
@@ -152,7 +153,9 @@ def main() -> None:
         pickle.dump(bundle, fh)
     metrics_path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
 
-    preview = df[["case_id", "event_name", "label_name"] + feature_columns].head(500)
+    feature_frame = df[["case_id", "event_name", "label_name"] + feature_columns]
+    feature_frame.to_csv(full_dataset_path, index=False)
+    preview = feature_frame.head(500)
     preview.to_csv(preview_path, index=False)
 
     oof_df = df[["case_id", "event_name", "label_name"]].copy()
@@ -165,6 +168,7 @@ def main() -> None:
             {
                 "model_path": str(model_path),
                 "metrics_path": str(metrics_path),
+                "full_dataset_path": str(full_dataset_path),
                 "preview_path": str(preview_path),
                 "oof_path": str(oof_path),
                 "rows": int(len(df)),
