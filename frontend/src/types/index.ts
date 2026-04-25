@@ -1,53 +1,213 @@
-// Типы данных для фронтенда
+export type RiskLevel = 'high' | 'medium' | 'low';
 
-export interface Account {
-  id: number;
-  externalId: string;
-  username: string;
-  displayName: string;
-  followersCount: number;
-  avatarUrl: string;
+export type CaseStatus = 'open' | 'closed' | 'finalized' | 'new' | 'in_review' | 'decided';
+
+export type ScorerKey =
+  | 'case_scores'
+  | 'case_feature'
+  | 'case_logreg_oof'
+  | 'case_lightgbm_oof'
+  | 'pheme_transformer_text'
+  | 'pheme_transformer_text_oof'
+  | 'case_ensemble_v1';
+
+export type EvidenceGroup = 'temporal' | 'coordination' | 'content' | 'bot' | 'model';
+
+export interface ComponentScores {
+  temporal_score: number | null;
+  coordination_score: number | null;
+  content_score: number | null;
+  bot_score: number | null;
 }
 
-export interface Post {
-  id: number;
-  externalId: string;
-  content: string;
-  language: string;
-  publishedAt: string;
-  likesCount: number;
-  repostsCount: number;
-  author: Account;
+export interface EvidenceItem {
+  key: string;
+  label: string;
+  group: EvidenceGroup;
+  value: number | null;
+  baseline: number | null;
+  dir: 'up' | 'down';
 }
 
-export interface AnalysisResult {
+export interface CaseListItem {
   id: number;
-  postId: number;
-  manipulationScore: number;
-  confidenceScore: number;
-  coordinationContribution: number;
-  temporalContribution: number;
-  narrativeContribution: number;
-  escalationPriority: number;
-  confidenceNote: string;
+  external_id: string;
+  title: string;
+  event_name: string;
+  source_name: string;
+  dataset_name: string;
+  dataset_split: string;
+  label: string | null;
+  status: CaseStatus;
+  post_count: number;
+  duration_min: number | null;
+  first_event_at: string | null;
+  last_event_at: string | null;
+  active_scorer: string;
+  model_version: string;
+  risk_score: number | null;
+  risk_level: RiskLevel;
+  scores: ComponentScores;
+  evidence: EvidenceItem[];
+  timeline: number[];
 }
 
-export interface EvidenceCard {
+export interface CasesListQuery {
+  scorer_key?: ScorerKey;
+  source_name?: string;
+  dataset_name?: string;
+  dataset_split?: string;
+  event_name?: string;
+  status?: CaseStatus;
+  risk_level?: RiskLevel;
+  label?: string;
+  limit?: number;
+}
+
+export interface CasesListResponse {
+  scorer_key: string;
+  total: number;
+  items: CaseListItem[];
+}
+
+export interface PostItem {
+  id: string;
+  external_id: string;
+  author_handle: string;
+  t_offset_sec: number;
+  kind: 'root' | 'reply' | 'repost';
+  text: string;
+  reply_count: number;
+  published_at: string;
+  tags: string[];
+  links: string[];
+}
+
+export interface AccountInvolved {
   id: number;
-  analysisResultId: number;
-  radarData: {
-    coordination: number;
-    temporal: number;
-    narrative: number;
+  external_id: string;
+  handle: string;
+  joined_month: string;
+  posts: number;
+  share: number;
+  bot_score: number | null;
+  is_verified: boolean;
+}
+
+export interface UrlArtifact {
+  url: string;
+  domain: string;
+  count: number;
+}
+
+export interface HashtagArtifact {
+  tag: string;
+  count: number;
+}
+
+export interface PhraseArtifact {
+  phrase: string;
+  count: number;
+}
+
+export interface CaseArtifacts {
+  urls: UrlArtifact[];
+  hashtags: HashtagArtifact[];
+  phrases: PhraseArtifact[];
+}
+
+export interface CaseFeaturesSnapshot {
+  feature_version: string;
+  event_count: number;
+  unique_account_count: number;
+  unique_url_count: number;
+  unique_hashtag_count: number;
+  temporal_features: Record<string, unknown>;
+  coordination_features: Record<string, unknown>;
+  content_features: Record<string, unknown>;
+  feature_payload: Record<string, unknown>;
+  computed_at: string;
+}
+
+export interface CaseDetails extends CaseListItem {
+  root_post: PostItem | null;
+  posts: PostItem[];
+  accounts: AccountInvolved[];
+  artifacts: CaseArtifacts;
+  features: CaseFeaturesSnapshot | null;
+}
+
+export interface CaseModelScore {
+  case_id: number;
+  scorer_key: string;
+  model_version: string;
+  risk_score: number;
+  risk_level: RiskLevel;
+  confidence_score: number | null;
+  temporal_score: number | null;
+  coordination_score: number | null;
+  content_score: number | null;
+  evidence: string[];
+  feature_payload: Record<string, unknown>;
+  model_info: Record<string, unknown>;
+  pipeline_hash: string;
+  source_endpoint: string;
+  computed_at: string;
+}
+
+export interface CaseScoresResponse {
+  case_id: number;
+  count: number;
+  items: CaseModelScore[];
+}
+
+export interface ModelMetrics {
+  best_threshold?: number;
+  precision_at_10?: number;
+  precision_at_20?: number;
+  precision?: number;
+  recall?: number;
+  f1?: number;
+  roc_auc?: number;
+  pr_auc?: number;
+}
+
+export interface ModelComparisonRow {
+  scorer_key: string;
+  label: string;
+  description: string;
+  model_version: string;
+  case_count: number;
+  metrics: ModelMetrics;
+  ensemble_weights?: {
+    transformer: number;
+    lightgbm: number;
+    baseline: number;
   };
-  summary: string;
-  keyEvidence: string[];
-  uncertaintyExplanation: string;
 }
 
-export interface TrendingTag {
-  id: number;
-  tagName: string;
-  todayAccounts: number;
-  todayUses: number;
+export interface ModelComparisonResponse {
+  dataset_name: string;
+  dataset_split: string;
+  source_name: string;
+  case_count: number;
+  positive_cases: number;
+  negative_cases: number;
+  rows: ModelComparisonRow[];
+  generated_at: string;
+}
+
+export type AnalystDecision = 'suspicious' | 'not_suspicious' | 'unclear';
+
+export interface DecisionResponse {
+  case_id: number;
+  decision: AnalystDecision;
+  recorded_at: string;
+  audit_id: string;
+}
+
+export interface ScorerOption {
+  key: ScorerKey;
+  label: string;
+  description: string;
 }
