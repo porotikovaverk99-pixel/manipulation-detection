@@ -6,10 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"time"
 
-	_ "github.com/lib/pq"
+	"github.com/lib/pq"
 	"github.com/porotikovaverk99-pixel/manipulation-detection/backend/internal/collector/mastodon"
 )
 
@@ -149,6 +150,8 @@ type CaseFilter struct {
 	DatasetName           string
 	DatasetSplit          string
 	Label                 string
+	RiskLevel             string
+	ScorerKey             string
 	OnlyUnscored          bool
 	MissingModelScoreKeys []string
 	Limit                 int
@@ -254,11 +257,167 @@ type CaseListItem struct {
 	FirstEventAt      *time.Time `json:"first_event_at,omitempty"`
 	LastEventAt       *time.Time `json:"last_event_at,omitempty"`
 	PostCount         int        `json:"post_count"`
+	ScorerKey         string     `json:"scorer_key,omitempty"`
+	ModelVersion      string     `json:"model_version,omitempty"`
 	RiskScore         *float64   `json:"risk_score,omitempty"`
 	RiskLevel         string     `json:"risk_level,omitempty"`
 	TemporalScore     *float64   `json:"temporal_score,omitempty"`
 	CoordinationScore *float64   `json:"coordination_score,omitempty"`
 	ContentScore      *float64   `json:"content_score,omitempty"`
+}
+
+// CasePostItem представляет пост в case details API.
+type CasePostItem struct {
+	ID               int64      `json:"id"`
+	ExternalID       string     `json:"external_id"`
+	AccountID        int64      `json:"account_id"`
+	Username         string     `json:"username"`
+	PublishedAt      time.Time  `json:"published_at"`
+	Content          string     `json:"content"`
+	IsCaseRoot       bool       `json:"is_case_root"`
+	ReplyToPostID    *int64     `json:"reply_to_post_id,omitempty"`
+	LikesCount       int        `json:"likes_count"`
+	RepostsCount     int        `json:"reposts_count"`
+	RepliesCount     int        `json:"replies_count"`
+	FollowersCount   int        `json:"followers_count"`
+	FollowingCount   int        `json:"following_count"`
+	PostsCount       int        `json:"posts_count"`
+	IsVerified       bool       `json:"is_verified"`
+	AccountCreatedAt *time.Time `json:"account_created_at,omitempty"`
+	AccountURL       string     `json:"account_url,omitempty"`
+	Tags             []string   `json:"tags,omitempty"`
+	Links            []string   `json:"links,omitempty"`
+}
+
+// CaseAccountItem агрегирует участие аккаунта в case.
+type CaseAccountItem struct {
+	ID             int64      `json:"id"`
+	ExternalID     string     `json:"external_id"`
+	Username       string     `json:"username"`
+	DisplayName    string     `json:"display_name,omitempty"`
+	AccountURL     string     `json:"account_url,omitempty"`
+	FollowersCount int        `json:"followers_count"`
+	FollowingCount int        `json:"following_count"`
+	PostsCount     int        `json:"posts_count"`
+	IsBot          bool       `json:"is_bot"`
+	IsVerified     bool       `json:"is_verified"`
+	CasePostCount  int        `json:"case_post_count"`
+	FirstPostAt    *time.Time `json:"first_post_at,omitempty"`
+	LastPostAt     *time.Time `json:"last_post_at,omitempty"`
+	HasRootPost    bool       `json:"has_root_post"`
+}
+
+// ArtifactCount хранит частотность shared artifacts внутри case.
+type ArtifactCount struct {
+	Value string `json:"value"`
+	Count int    `json:"count"`
+}
+
+// CaseArtifactsSummary агрегирует ссылки, домены и теги case.
+type CaseArtifactsSummary struct {
+	Tags    []ArtifactCount `json:"tags,omitempty"`
+	URLs    []ArtifactCount `json:"urls,omitempty"`
+	Domains []ArtifactCount `json:"domains,omitempty"`
+}
+
+// CaseFeaturesSnapshot представляет сохраненный feature snapshot case.
+type CaseFeaturesSnapshot struct {
+	FeatureVersion       string                 `json:"feature_version"`
+	EventCount           int                    `json:"event_count"`
+	UniqueAccountCount   int                    `json:"unique_account_count"`
+	UniqueURLCount       int                    `json:"unique_url_count"`
+	UniqueHashtagCount   int                    `json:"unique_hashtag_count"`
+	TemporalFeatures     map[string]interface{} `json:"temporal_features"`
+	CoordinationFeatures map[string]interface{} `json:"coordination_features"`
+	ContentFeatures      map[string]interface{} `json:"content_features"`
+	FeaturePayload       map[string]interface{} `json:"feature_payload"`
+	ComputedAt           time.Time              `json:"computed_at"`
+}
+
+// CaseDetails собирает данные для frontend case details view.
+type CaseDetails struct {
+	Case      CaseListItem          `json:"case"`
+	RootPost  *CasePostItem         `json:"root_post,omitempty"`
+	Posts     []CasePostItem        `json:"posts"`
+	Accounts  []CaseAccountItem     `json:"accounts"`
+	Artifacts CaseArtifactsSummary  `json:"artifacts"`
+	Features  *CaseFeaturesSnapshot `json:"features,omitempty"`
+}
+
+// CaseModelScoreItem представляет один score из case_model_scores.
+type CaseModelScoreItem struct {
+	CaseID            int64                  `json:"case_id"`
+	ScorerKey         string                 `json:"scorer_key"`
+	ModelVersion      string                 `json:"model_version"`
+	RiskScore         float64                `json:"risk_score"`
+	RiskLevel         string                 `json:"risk_level"`
+	ConfidenceScore   *float64               `json:"confidence_score,omitempty"`
+	TemporalScore     *float64               `json:"temporal_score,omitempty"`
+	CoordinationScore *float64               `json:"coordination_score,omitempty"`
+	ContentScore      *float64               `json:"content_score,omitempty"`
+	Evidence          []string               `json:"evidence,omitempty"`
+	FeaturePayload    map[string]interface{} `json:"feature_payload,omitempty"`
+	ModelInfo         map[string]interface{} `json:"model_info,omitempty"`
+	PipelineHash      string                 `json:"pipeline_hash,omitempty"`
+	SourceEndpoint    string                 `json:"source_endpoint,omitempty"`
+	ComputedAt        time.Time              `json:"computed_at"`
+}
+
+// ModelComparisonFilter задает срез для сравнения case_model_scores.
+type ModelComparisonFilter struct {
+	SourceName     string
+	DatasetName    string
+	DatasetSplit   string
+	ScorerKeys     []string
+	PositiveLabels []string
+	TopK           int
+}
+
+// ModelMetrics хранит метрики качества scorer-а.
+type ModelMetrics struct {
+	BestThreshold *float64 `json:"best_threshold,omitempty"`
+	PrecisionAt10 *float64 `json:"precision_at_10,omitempty"`
+	PrecisionAt20 *float64 `json:"precision_at_20,omitempty"`
+	Precision     *float64 `json:"precision,omitempty"`
+	Recall        *float64 `json:"recall,omitempty"`
+	F1            *float64 `json:"f1,omitempty"`
+	ROCAUC        *float64 `json:"roc_auc,omitempty"`
+	PRAUC         *float64 `json:"pr_auc,omitempty"`
+}
+
+// ModelComparisonModel хранит сравнение одного scorer-а.
+type ModelComparisonModel struct {
+	ScorerKey    string       `json:"scorer_key"`
+	ModelVersion string       `json:"model_version,omitempty"`
+	CaseCount    int          `json:"case_count"`
+	Metrics      ModelMetrics `json:"metrics"`
+}
+
+// ModelComparisonTopCase хранит top case по выбранному ranking scorer-у.
+type ModelComparisonTopCase struct {
+	CaseID          int64              `json:"case_id"`
+	ExternalCaseID  string             `json:"external_case_id,omitempty"`
+	EventName       string             `json:"event_name,omitempty"`
+	Label           string             `json:"label,omitempty"`
+	RankingScore    float64            `json:"ranking_score"`
+	ComponentScores map[string]float64 `json:"component_scores"`
+}
+
+// ModelComparisonSummary хранит runtime comparison по case_model_scores.
+type ModelComparisonSummary struct {
+	Dataset struct {
+		SourceName   string `json:"source_name,omitempty"`
+		DatasetName  string `json:"dataset_name,omitempty"`
+		DatasetSplit string `json:"dataset_split,omitempty"`
+	} `json:"dataset"`
+	PositiveLabels []string                        `json:"positive_labels"`
+	CaseCount      int                             `json:"case_count"`
+	PositiveCases  int                             `json:"positive_cases"`
+	NegativeCases  int                             `json:"negative_cases"`
+	Scorers        []string                        `json:"scorers"`
+	Models         map[string]ModelComparisonModel `json:"models"`
+	TopCases       []ModelComparisonTopCase        `json:"top_cases"`
+	GeneratedAt    time.Time                       `json:"generated_at"`
 }
 
 // ScoredCaseItem представляет case со score и метаданными для evaluation/export.
@@ -920,6 +1079,8 @@ func (p *PostgresDB) ListCases(filter CaseFilter) ([]CaseListItem, error) {
 
 	conditions := make([]string, 0, 5)
 	args := make([]interface{}, 0, 6)
+	scorerKey := normalizeScorerKey(filter.ScorerKey)
+	useModelScore := useCaseModelScore(scorerKey)
 
 	if filter.SourceName != "" {
 		args = append(args, filter.SourceName)
@@ -937,8 +1098,45 @@ func (p *PostgresDB) ListCases(filter CaseFilter) ([]CaseListItem, error) {
 		args = append(args, filter.Label)
 		conditions = append(conditions, fmt.Sprintf("c.label = $%d", len(args)))
 	}
+	if filter.RiskLevel != "" {
+		args = append(args, filter.RiskLevel)
+		if useModelScore {
+			conditions = append(conditions, fmt.Sprintf("cms.risk_level = $%d", len(args)))
+		} else {
+			conditions = append(conditions, fmt.Sprintf("cs.risk_level = $%d", len(args)))
+		}
+	}
+	scoreJoin := "LEFT JOIN case_scores cs ON cs.case_id = c.id"
+	scoreGroupBy := "c.id, cs.case_id"
+	scoreSelect := `
+			'case_scores' AS scorer_key,
+			COALESCE(cs.score_version, '') AS model_version,
+			cs.risk_score,
+			COALESCE(cs.risk_level, '') AS risk_level,
+			cs.temporal_score,
+			cs.coordination_score,
+			cs.content_score`
+	scoreOrder := "cs.risk_score DESC NULLS LAST"
+	if useModelScore {
+		args = append(args, scorerKey)
+		scoreJoin = fmt.Sprintf("LEFT JOIN case_model_scores cms ON cms.case_id = c.id AND cms.scorer_key = $%d", len(args))
+		scoreGroupBy = "c.id, cms.id"
+		scoreSelect = `
+			COALESCE(cms.scorer_key, '') AS scorer_key,
+			COALESCE(cms.model_version, '') AS model_version,
+			cms.risk_score,
+			COALESCE(cms.risk_level, '') AS risk_level,
+			cms.temporal_score,
+			cms.coordination_score,
+			cms.content_score`
+		scoreOrder = "cms.risk_score DESC NULLS LAST"
+	}
 	if filter.OnlyUnscored {
-		conditions = append(conditions, "cs.case_id IS NULL")
+		if useModelScore {
+			conditions = append(conditions, "cms.case_id IS NULL")
+		} else {
+			conditions = append(conditions, "cs.case_id IS NULL")
+		}
 	}
 	if len(conditions) == 0 {
 		conditions = append(conditions, "1=1")
@@ -960,19 +1158,15 @@ func (p *PostgresDB) ListCases(filter CaseFilter) ([]CaseListItem, error) {
 			c.first_event_at,
 			c.last_event_at,
 			COUNT(p.id) AS post_count,
-			cs.risk_score,
-			COALESCE(cs.risk_level, '') AS risk_level,
-			cs.temporal_score,
-			cs.coordination_score,
-			cs.content_score
+			%s
 		FROM cases c
 		LEFT JOIN posts p ON p.case_id = c.id
-		LEFT JOIN case_scores cs ON cs.case_id = c.id
+		%s
 		WHERE %s
-		GROUP BY c.id, cs.case_id
-		ORDER BY c.first_event_at DESC NULLS LAST, c.id DESC
+		GROUP BY %s
+		ORDER BY %s, c.first_event_at DESC NULLS LAST, c.id DESC
 		LIMIT $%d
-	`, strings.Join(conditions, " AND "), len(args))
+	`, scoreSelect, scoreJoin, strings.Join(conditions, " AND "), scoreGroupBy, scoreOrder, len(args))
 
 	rows, err := p.db.Query(query, args...)
 	if err != nil {
@@ -998,6 +1192,8 @@ func (p *PostgresDB) ListCases(filter CaseFilter) ([]CaseListItem, error) {
 			&item.FirstEventAt,
 			&item.LastEventAt,
 			&item.PostCount,
+			&item.ScorerKey,
+			&item.ModelVersion,
 			&riskScore,
 			&item.RiskLevel,
 			&temporalScore,
@@ -1025,6 +1221,427 @@ func (p *PostgresDB) ListCases(filter CaseFilter) ([]CaseListItem, error) {
 		items = append(items, item)
 	}
 
+	return items, rows.Err()
+}
+
+// GetCaseDetails возвращает полный case-level payload для frontend details view.
+func (p *PostgresDB) GetCaseDetails(caseID int64, scorerKey string) (CaseDetails, error) {
+	if caseID <= 0 {
+		return CaseDetails{}, sql.ErrNoRows
+	}
+
+	summary, err := p.getCaseSummary(caseID, scorerKey)
+	if err != nil {
+		return CaseDetails{}, err
+	}
+
+	rawPosts, err := p.getCasePosts(caseID)
+	if err != nil {
+		return CaseDetails{}, fmt.Errorf("load case posts: %w", err)
+	}
+	posts := make([]CasePostItem, 0, len(rawPosts))
+	var rootPost *CasePostItem
+	for _, raw := range rawPosts {
+		item := casePostDataToItem(raw)
+		if item.IsCaseRoot && rootPost == nil {
+			copyItem := item
+			rootPost = &copyItem
+		}
+		posts = append(posts, item)
+	}
+	if rootPost == nil && len(posts) > 0 {
+		copyItem := posts[0]
+		rootPost = &copyItem
+	}
+
+	accounts, err := p.getCaseAccounts(caseID)
+	if err != nil {
+		return CaseDetails{}, fmt.Errorf("load case accounts: %w", err)
+	}
+	artifacts, err := p.getCaseArtifacts(caseID)
+	if err != nil {
+		return CaseDetails{}, fmt.Errorf("load case artifacts: %w", err)
+	}
+	features, err := p.getCaseFeaturesSnapshot(caseID)
+	if err != nil {
+		return CaseDetails{}, fmt.Errorf("load case features: %w", err)
+	}
+
+	return CaseDetails{
+		Case:      summary,
+		RootPost:  rootPost,
+		Posts:     posts,
+		Accounts:  accounts,
+		Artifacts: artifacts,
+		Features:  features,
+	}, nil
+}
+
+func (p *PostgresDB) getCaseSummary(caseID int64, scorerKey string) (CaseListItem, error) {
+	scorerKey = normalizeScorerKey(scorerKey)
+	useModelScore := useCaseModelScore(scorerKey)
+	args := []interface{}{caseID}
+
+	scoreJoin := "LEFT JOIN case_scores cs ON cs.case_id = c.id"
+	scoreGroupBy := "c.id, cs.case_id"
+	scoreSelect := `
+			'case_scores' AS scorer_key,
+			COALESCE(cs.score_version, '') AS model_version,
+			cs.risk_score,
+			COALESCE(cs.risk_level, '') AS risk_level,
+			cs.temporal_score,
+			cs.coordination_score,
+			cs.content_score`
+	if useModelScore {
+		args = append(args, scorerKey)
+		scoreJoin = "LEFT JOIN case_model_scores cms ON cms.case_id = c.id AND cms.scorer_key = $2"
+		scoreGroupBy = "c.id, cms.id"
+		scoreSelect = `
+			COALESCE(cms.scorer_key, '') AS scorer_key,
+			COALESCE(cms.model_version, '') AS model_version,
+			cms.risk_score,
+			COALESCE(cms.risk_level, '') AS risk_level,
+			cms.temporal_score,
+			cms.coordination_score,
+			cms.content_score`
+	}
+
+	query := fmt.Sprintf(`
+		SELECT
+			c.id,
+			c.source_name,
+			c.dataset_name,
+			c.dataset_split,
+			c.external_case_id,
+			c.case_type,
+			COALESCE(c.label, '') AS label,
+			COALESCE(c.title, '') AS title,
+			COALESCE(c.event_name, '') AS event_name,
+			c.status,
+			c.first_event_at,
+			c.last_event_at,
+			COUNT(p.id) AS post_count,
+			%s
+		FROM cases c
+		LEFT JOIN posts p ON p.case_id = c.id
+		%s
+		WHERE c.id = $1
+		GROUP BY %s
+	`, scoreSelect, scoreJoin, scoreGroupBy)
+
+	var item CaseListItem
+	var riskScore, temporalScore, coordinationScore, contentScore sql.NullFloat64
+	err := p.db.QueryRow(query, args...).Scan(
+		&item.ID,
+		&item.SourceName,
+		&item.DatasetName,
+		&item.DatasetSplit,
+		&item.ExternalCaseID,
+		&item.CaseType,
+		&item.Label,
+		&item.Title,
+		&item.EventName,
+		&item.Status,
+		&item.FirstEventAt,
+		&item.LastEventAt,
+		&item.PostCount,
+		&item.ScorerKey,
+		&item.ModelVersion,
+		&riskScore,
+		&item.RiskLevel,
+		&temporalScore,
+		&coordinationScore,
+		&contentScore,
+	)
+	if err != nil {
+		return CaseListItem{}, err
+	}
+	if riskScore.Valid {
+		v := riskScore.Float64
+		item.RiskScore = &v
+	}
+	if temporalScore.Valid {
+		v := temporalScore.Float64
+		item.TemporalScore = &v
+	}
+	if coordinationScore.Valid {
+		v := coordinationScore.Float64
+		item.CoordinationScore = &v
+	}
+	if contentScore.Valid {
+		v := contentScore.Float64
+		item.ContentScore = &v
+	}
+	return item, nil
+}
+
+func (p *PostgresDB) getCaseAccounts(caseID int64) ([]CaseAccountItem, error) {
+	rows, err := p.db.Query(`
+		SELECT
+			a.id,
+			a.external_id,
+			a.username,
+			COALESCE(a.display_name, '') AS display_name,
+			COALESCE(a.account_url, '') AS account_url,
+			COALESCE(a.followers_count, 0) AS followers_count,
+			COALESCE(a.following_count, 0) AS following_count,
+			COALESCE(a.posts_count, 0) AS posts_count,
+			COALESCE(a.is_bot, FALSE) AS is_bot,
+			COALESCE(a.is_verified, FALSE) AS is_verified,
+			COUNT(p.id) AS case_post_count,
+			MIN(p.published_at) AS first_post_at,
+			MAX(p.published_at) AS last_post_at,
+			BOOL_OR(p.is_case_root) AS has_root_post
+		FROM posts p
+		JOIN accounts a ON a.id = p.account_id
+		WHERE p.case_id = $1
+		GROUP BY a.id
+		ORDER BY COUNT(p.id) DESC, a.id ASC
+	`, caseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]CaseAccountItem, 0, 16)
+	for rows.Next() {
+		var item CaseAccountItem
+		var firstPostAt, lastPostAt sql.NullTime
+		if err := rows.Scan(
+			&item.ID,
+			&item.ExternalID,
+			&item.Username,
+			&item.DisplayName,
+			&item.AccountURL,
+			&item.FollowersCount,
+			&item.FollowingCount,
+			&item.PostsCount,
+			&item.IsBot,
+			&item.IsVerified,
+			&item.CasePostCount,
+			&firstPostAt,
+			&lastPostAt,
+			&item.HasRootPost,
+		); err != nil {
+			return nil, err
+		}
+		if firstPostAt.Valid {
+			v := firstPostAt.Time
+			item.FirstPostAt = &v
+		}
+		if lastPostAt.Valid {
+			v := lastPostAt.Time
+			item.LastPostAt = &v
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (p *PostgresDB) getCaseArtifacts(caseID int64) (CaseArtifactsSummary, error) {
+	tags, err := p.getCaseTagCounts(caseID)
+	if err != nil {
+		return CaseArtifactsSummary{}, err
+	}
+	urls, err := p.getCaseURLCounts(caseID)
+	if err != nil {
+		return CaseArtifactsSummary{}, err
+	}
+	domains, err := p.getCaseDomainCounts(caseID)
+	if err != nil {
+		return CaseArtifactsSummary{}, err
+	}
+	return CaseArtifactsSummary{Tags: tags, URLs: urls, Domains: domains}, nil
+}
+
+func (p *PostgresDB) getCaseTagCounts(caseID int64) ([]ArtifactCount, error) {
+	return p.queryArtifactCounts(`
+		SELECT pt.tag_name AS value, COUNT(*) AS count
+		FROM post_tags pt
+		JOIN posts p ON p.id = pt.post_id
+		WHERE p.case_id = $1
+		GROUP BY pt.tag_name
+		ORDER BY COUNT(*) DESC, pt.tag_name ASC
+		LIMIT 20
+	`, caseID)
+}
+
+func (p *PostgresDB) getCaseURLCounts(caseID int64) ([]ArtifactCount, error) {
+	return p.queryArtifactCounts(`
+		SELECT COALESCE(pl.expanded_url, pl.url) AS value, COUNT(*) AS count
+		FROM post_links pl
+		JOIN posts p ON p.id = pl.post_id
+		WHERE p.case_id = $1
+		GROUP BY COALESCE(pl.expanded_url, pl.url)
+		ORDER BY COUNT(*) DESC, COALESCE(pl.expanded_url, pl.url) ASC
+		LIMIT 20
+	`, caseID)
+}
+
+func (p *PostgresDB) getCaseDomainCounts(caseID int64) ([]ArtifactCount, error) {
+	return p.queryArtifactCounts(`
+		SELECT COALESCE(NULLIF(pl.domain, ''), COALESCE(pl.expanded_url, pl.url)) AS value, COUNT(*) AS count
+		FROM post_links pl
+		JOIN posts p ON p.id = pl.post_id
+		WHERE p.case_id = $1
+		GROUP BY COALESCE(NULLIF(pl.domain, ''), COALESCE(pl.expanded_url, pl.url))
+		ORDER BY COUNT(*) DESC, COALESCE(NULLIF(pl.domain, ''), COALESCE(pl.expanded_url, pl.url)) ASC
+		LIMIT 20
+	`, caseID)
+}
+
+func (p *PostgresDB) queryArtifactCounts(query string, caseID int64) ([]ArtifactCount, error) {
+	rows, err := p.db.Query(query, caseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]ArtifactCount, 0, 20)
+	for rows.Next() {
+		var item ArtifactCount
+		if err := rows.Scan(&item.Value, &item.Count); err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(item.Value) != "" {
+			items = append(items, item)
+		}
+	}
+	return items, rows.Err()
+}
+
+func (p *PostgresDB) getCaseFeaturesSnapshot(caseID int64) (*CaseFeaturesSnapshot, error) {
+	var item CaseFeaturesSnapshot
+	var temporalRaw, coordinationRaw, contentRaw, payloadRaw []byte
+	err := p.db.QueryRow(`
+		SELECT
+			feature_version,
+			event_count,
+			unique_account_count,
+			unique_url_count,
+			unique_hashtag_count,
+			temporal_features,
+			coordination_features,
+			content_features,
+			feature_payload,
+			computed_at
+		FROM case_features
+		WHERE case_id = $1
+	`, caseID).Scan(
+		&item.FeatureVersion,
+		&item.EventCount,
+		&item.UniqueAccountCount,
+		&item.UniqueURLCount,
+		&item.UniqueHashtagCount,
+		&temporalRaw,
+		&coordinationRaw,
+		&contentRaw,
+		&payloadRaw,
+		&item.ComputedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if item.TemporalFeatures, err = decodeJSONMap(temporalRaw); err != nil {
+		return nil, fmt.Errorf("decode temporal features: %w", err)
+	}
+	if item.CoordinationFeatures, err = decodeJSONMap(coordinationRaw); err != nil {
+		return nil, fmt.Errorf("decode coordination features: %w", err)
+	}
+	if item.ContentFeatures, err = decodeJSONMap(contentRaw); err != nil {
+		return nil, fmt.Errorf("decode content features: %w", err)
+	}
+	if item.FeaturePayload, err = decodeJSONMap(payloadRaw); err != nil {
+		return nil, fmt.Errorf("decode feature payload: %w", err)
+	}
+	return &item, nil
+}
+
+// ListCaseModelScores возвращает все сохраненные model/scorer outputs для case.
+func (p *PostgresDB) ListCaseModelScores(caseID int64) ([]CaseModelScoreItem, error) {
+	rows, err := p.db.Query(`
+		SELECT
+			case_id,
+			scorer_key,
+			model_version,
+			risk_score,
+			risk_level,
+			confidence_score,
+			temporal_score,
+			coordination_score,
+			content_score,
+			evidence,
+			feature_payload,
+			model_info,
+			COALESCE(pipeline_hash, '') AS pipeline_hash,
+			COALESCE(source_endpoint, '') AS source_endpoint,
+			computed_at
+		FROM case_model_scores
+		WHERE case_id = $1
+		ORDER BY risk_score DESC, scorer_key ASC
+	`, caseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]CaseModelScoreItem, 0, 4)
+	for rows.Next() {
+		var item CaseModelScoreItem
+		var confidenceScore, temporalScore, coordinationScore, contentScore sql.NullFloat64
+		var evidenceRaw, payloadRaw, modelInfoRaw []byte
+		if err := rows.Scan(
+			&item.CaseID,
+			&item.ScorerKey,
+			&item.ModelVersion,
+			&item.RiskScore,
+			&item.RiskLevel,
+			&confidenceScore,
+			&temporalScore,
+			&coordinationScore,
+			&contentScore,
+			&evidenceRaw,
+			&payloadRaw,
+			&modelInfoRaw,
+			&item.PipelineHash,
+			&item.SourceEndpoint,
+			&item.ComputedAt,
+		); err != nil {
+			return nil, err
+		}
+		if confidenceScore.Valid {
+			v := confidenceScore.Float64
+			item.ConfidenceScore = &v
+		}
+		if temporalScore.Valid {
+			v := temporalScore.Float64
+			item.TemporalScore = &v
+		}
+		if coordinationScore.Valid {
+			v := coordinationScore.Float64
+			item.CoordinationScore = &v
+		}
+		if contentScore.Valid {
+			v := contentScore.Float64
+			item.ContentScore = &v
+		}
+		if len(evidenceRaw) > 0 {
+			if err := json.Unmarshal(evidenceRaw, &item.Evidence); err != nil {
+				return nil, fmt.Errorf("decode case model evidence: %w", err)
+			}
+		}
+		var err error
+		if item.FeaturePayload, err = decodeJSONMap(payloadRaw); err != nil {
+			return nil, fmt.Errorf("decode case model feature payload: %w", err)
+		}
+		if item.ModelInfo, err = decodeJSONMap(modelInfoRaw); err != nil {
+			return nil, fmt.Errorf("decode case model info: %w", err)
+		}
+		items = append(items, item)
+	}
 	return items, rows.Err()
 }
 
@@ -1584,11 +2201,506 @@ func (p *PostgresDB) SaveEvaluationRun(rec EvaluationRunRecord) (int64, error) {
 	return id, nil
 }
 
+type modelScoreForComparison struct {
+	CaseID         int64
+	ExternalCaseID string
+	EventName      string
+	Label          string
+	ScorerKey      string
+	ModelVersion   string
+	RiskScore      float64
+}
+
+// GetModelComparison сравнивает выбранные case_model_scores на размеченных cases.
+func (p *PostgresDB) GetModelComparison(filter ModelComparisonFilter) (ModelComparisonSummary, error) {
+	filter.ScorerKeys = normalizeScorerKeys(filter.ScorerKeys)
+	if len(filter.ScorerKeys) == 0 {
+		filter.ScorerKeys = []string{
+			"case_logreg_oof",
+			"case_lightgbm_oof",
+			"pheme_transformer_text_oof",
+			"case_ensemble_v1",
+		}
+	}
+	filter.PositiveLabels = normalizePositiveLabels(filter.PositiveLabels)
+	if len(filter.PositiveLabels) == 0 {
+		filter.PositiveLabels = []string{"rumor", "rumour"}
+	}
+	if filter.TopK <= 0 {
+		filter.TopK = 20
+	}
+	if filter.TopK > 100 {
+		filter.TopK = 100
+	}
+
+	conditions := []string{"cms.scorer_key = ANY($1)", "COALESCE(c.label, '') <> ''"}
+	args := []interface{}{pq.Array(filter.ScorerKeys)}
+	if filter.SourceName != "" {
+		args = append(args, filter.SourceName)
+		conditions = append(conditions, fmt.Sprintf("c.source_name = $%d", len(args)))
+	}
+	if filter.DatasetName != "" {
+		args = append(args, filter.DatasetName)
+		conditions = append(conditions, fmt.Sprintf("c.dataset_name = $%d", len(args)))
+	}
+	if filter.DatasetSplit != "" {
+		args = append(args, filter.DatasetSplit)
+		conditions = append(conditions, fmt.Sprintf("c.dataset_split = $%d", len(args)))
+	}
+
+	query := fmt.Sprintf(`
+		SELECT
+			c.id,
+			c.external_case_id,
+			COALESCE(c.event_name, '') AS event_name,
+			COALESCE(c.label, '') AS label,
+			cms.scorer_key,
+			cms.model_version,
+			cms.risk_score
+		FROM cases c
+		JOIN case_model_scores cms ON cms.case_id = c.id
+		WHERE %s
+		ORDER BY c.id ASC, cms.scorer_key ASC
+	`, strings.Join(conditions, " AND "))
+
+	rows, err := p.db.Query(query, args...)
+	if err != nil {
+		return ModelComparisonSummary{}, fmt.Errorf("load model comparison scores: %w", err)
+	}
+	defer rows.Close()
+
+	raw := make([]modelScoreForComparison, 0, 1024)
+	for rows.Next() {
+		var item modelScoreForComparison
+		if err := rows.Scan(
+			&item.CaseID,
+			&item.ExternalCaseID,
+			&item.EventName,
+			&item.Label,
+			&item.ScorerKey,
+			&item.ModelVersion,
+			&item.RiskScore,
+		); err != nil {
+			return ModelComparisonSummary{}, fmt.Errorf("scan model comparison score: %w", err)
+		}
+		raw = append(raw, item)
+	}
+	if err := rows.Err(); err != nil {
+		return ModelComparisonSummary{}, err
+	}
+
+	summary := ModelComparisonSummary{
+		PositiveLabels: filter.PositiveLabels,
+		Scorers:        filter.ScorerKeys,
+		Models:         make(map[string]ModelComparisonModel, len(filter.ScorerKeys)),
+		GeneratedAt:    time.Now().UTC(),
+	}
+	summary.Dataset.SourceName = filter.SourceName
+	summary.Dataset.DatasetName = filter.DatasetName
+	summary.Dataset.DatasetSplit = filter.DatasetSplit
+
+	if len(raw) == 0 {
+		return summary, nil
+	}
+
+	positiveSet := make(map[string]struct{}, len(filter.PositiveLabels))
+	for _, label := range filter.PositiveLabels {
+		positiveSet[normalizeLabelForMetrics(label)] = struct{}{}
+	}
+
+	caseLabels := make(map[int64]string)
+	caseExternalIDs := make(map[int64]string)
+	caseEvents := make(map[int64]string)
+	scoresByScorer := make(map[string][]labeledScore, len(filter.ScorerKeys))
+	scoresByCase := make(map[int64]map[string]float64)
+	modelVersions := make(map[string]map[string]int)
+
+	for _, item := range raw {
+		caseLabels[item.CaseID] = item.Label
+		caseExternalIDs[item.CaseID] = item.ExternalCaseID
+		caseEvents[item.CaseID] = item.EventName
+		if _, ok := scoresByCase[item.CaseID]; !ok {
+			scoresByCase[item.CaseID] = make(map[string]float64)
+		}
+		scoresByCase[item.CaseID][item.ScorerKey] = item.RiskScore
+		scoresByScorer[item.ScorerKey] = append(scoresByScorer[item.ScorerKey], labeledScore{
+			CaseID: item.CaseID,
+			Label:  item.Label,
+			Score:  item.RiskScore,
+		})
+		if _, ok := modelVersions[item.ScorerKey]; !ok {
+			modelVersions[item.ScorerKey] = make(map[string]int)
+		}
+		modelVersions[item.ScorerKey][item.ModelVersion]++
+	}
+
+	summary.CaseCount = len(caseLabels)
+	for _, label := range caseLabels {
+		if isPositiveMetricLabel(label, positiveSet) {
+			summary.PositiveCases++
+		} else {
+			summary.NegativeCases++
+		}
+	}
+
+	for _, scorerKey := range filter.ScorerKeys {
+		scores := scoresByScorer[scorerKey]
+		summary.Models[scorerKey] = ModelComparisonModel{
+			ScorerKey:    scorerKey,
+			ModelVersion: mostCommonString(modelVersions[scorerKey]),
+			CaseCount:    len(scores),
+			Metrics:      computeModelMetrics(scores, positiveSet),
+		}
+	}
+
+	rankingKey := filter.ScorerKeys[len(filter.ScorerKeys)-1]
+	if containsString(filter.ScorerKeys, "case_ensemble_v1") {
+		rankingKey = "case_ensemble_v1"
+	}
+	rankingItems := make([]ModelComparisonTopCase, 0, len(scoresByCase))
+	for caseID, scoreMap := range scoresByCase {
+		rankingScore, ok := scoreMap[rankingKey]
+		if !ok {
+			continue
+		}
+		rankingItems = append(rankingItems, ModelComparisonTopCase{
+			CaseID:          caseID,
+			ExternalCaseID:  caseExternalIDs[caseID],
+			EventName:       caseEvents[caseID],
+			Label:           caseLabels[caseID],
+			RankingScore:    rankingScore,
+			ComponentScores: scoreMap,
+		})
+	}
+	sort.SliceStable(rankingItems, func(i, j int) bool {
+		if rankingItems[i].RankingScore == rankingItems[j].RankingScore {
+			return rankingItems[i].CaseID < rankingItems[j].CaseID
+		}
+		return rankingItems[i].RankingScore > rankingItems[j].RankingScore
+	})
+	if len(rankingItems) > filter.TopK {
+		rankingItems = rankingItems[:filter.TopK]
+	}
+	summary.TopCases = rankingItems
+
+	return summary, nil
+}
+
 func marshalJSONObject(payload map[string]interface{}) ([]byte, error) {
 	if len(payload) == 0 {
 		return []byte(`{}`), nil
 	}
 	return json.Marshal(payload)
+}
+
+func decodeJSONMap(raw []byte) (map[string]interface{}, error) {
+	if len(raw) == 0 {
+		return map[string]interface{}{}, nil
+	}
+	var out map[string]interface{}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, err
+	}
+	if out == nil {
+		out = map[string]interface{}{}
+	}
+	return out, nil
+}
+
+func casePostDataToItem(raw CasePostData) CasePostItem {
+	return CasePostItem{
+		ID:               raw.ID,
+		ExternalID:       raw.ExternalID,
+		AccountID:        raw.AccountID,
+		Username:         raw.Username,
+		PublishedAt:      raw.PublishedAt,
+		Content:          raw.Content,
+		IsCaseRoot:       raw.IsCaseRoot,
+		ReplyToPostID:    raw.ReplyToPostID,
+		LikesCount:       raw.LikesCount,
+		RepostsCount:     raw.RepostsCount,
+		RepliesCount:     raw.RepliesCount,
+		FollowersCount:   raw.FollowersCount,
+		FollowingCount:   raw.FollowingCount,
+		PostsCount:       raw.PostsCount,
+		IsVerified:       raw.IsVerified,
+		AccountCreatedAt: raw.AccountCreatedAt,
+		AccountURL:       raw.AccountURL,
+		Tags:             raw.Tags,
+		Links:            raw.Links,
+	}
+}
+
+func normalizeScorerKey(raw string) string {
+	return strings.TrimSpace(raw)
+}
+
+func useCaseModelScore(scorerKey string) bool {
+	scorerKey = normalizeScorerKey(scorerKey)
+	if scorerKey == "" {
+		return false
+	}
+	switch scorerKey {
+	case "case_scores", "active", "default":
+		return false
+	default:
+		return true
+	}
+}
+
+func normalizeScorerKeys(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		key := strings.TrimSpace(value)
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, key)
+	}
+	return out
+}
+
+func normalizePositiveLabels(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		label := normalizeLabelForMetrics(value)
+		if label == "" {
+			continue
+		}
+		if _, ok := seen[label]; ok {
+			continue
+		}
+		seen[label] = struct{}{}
+		out = append(out, label)
+	}
+	sort.Strings(out)
+	return out
+}
+
+type labeledScore struct {
+	CaseID int64
+	Label  string
+	Score  float64
+}
+
+func computeModelMetrics(items []labeledScore, positiveSet map[string]struct{}) ModelMetrics {
+	if len(items) == 0 {
+		return ModelMetrics{}
+	}
+	threshold := bestMetricThreshold(items, positiveSet)
+	precision, recall, f1 := thresholdClassificationMetrics(items, positiveSet, threshold)
+	return ModelMetrics{
+		BestThreshold: &threshold,
+		PrecisionAt10: precisionAtKMetric(items, positiveSet, 10),
+		PrecisionAt20: precisionAtKMetric(items, positiveSet, 20),
+		Precision:     precision,
+		Recall:        recall,
+		F1:            f1,
+		ROCAUC:        rocAUCMetric(items, positiveSet),
+		PRAUC:         prAUCMetric(items, positiveSet),
+	}
+}
+
+func bestMetricThreshold(items []labeledScore, positiveSet map[string]struct{}) float64 {
+	bestThreshold := 0.5
+	bestF1 := -1.0
+	for i := 0; i <= 100; i++ {
+		threshold := float64(i) / 100.0
+		_, _, f1 := thresholdClassificationMetrics(items, positiveSet, threshold)
+		f1Value := 0.0
+		if f1 != nil {
+			f1Value = *f1
+		}
+		if f1Value > bestF1 {
+			bestF1 = f1Value
+			bestThreshold = threshold
+		}
+	}
+	return bestThreshold
+}
+
+func thresholdClassificationMetrics(items []labeledScore, positiveSet map[string]struct{}, threshold float64) (*float64, *float64, *float64) {
+	if len(items) == 0 {
+		return nil, nil, nil
+	}
+	tp, fp, fn := 0, 0, 0
+	for _, item := range items {
+		actual := isPositiveMetricLabel(item.Label, positiveSet)
+		predicted := item.Score >= threshold
+		switch {
+		case actual && predicted:
+			tp++
+		case !actual && predicted:
+			fp++
+		case actual && !predicted:
+			fn++
+		}
+	}
+	precision := 0.0
+	if tp+fp > 0 {
+		precision = float64(tp) / float64(tp+fp)
+	}
+	recall := 0.0
+	if tp+fn > 0 {
+		recall = float64(tp) / float64(tp+fn)
+	}
+	f1 := 0.0
+	if precision+recall > 0 {
+		f1 = 2 * precision * recall / (precision + recall)
+	}
+	return &precision, &recall, &f1
+}
+
+func precisionAtKMetric(items []labeledScore, positiveSet map[string]struct{}, k int) *float64 {
+	if len(items) == 0 || k <= 0 {
+		return nil
+	}
+	sortedItems := append([]labeledScore(nil), items...)
+	sort.SliceStable(sortedItems, func(i, j int) bool {
+		if sortedItems[i].Score == sortedItems[j].Score {
+			return sortedItems[i].CaseID < sortedItems[j].CaseID
+		}
+		return sortedItems[i].Score > sortedItems[j].Score
+	})
+	topK := k
+	if topK > len(sortedItems) {
+		topK = len(sortedItems)
+	}
+	positive := 0
+	for _, item := range sortedItems[:topK] {
+		if isPositiveMetricLabel(item.Label, positiveSet) {
+			positive++
+		}
+	}
+	value := float64(positive) / float64(topK)
+	return &value
+}
+
+func rocAUCMetric(items []labeledScore, positiveSet map[string]struct{}) *float64 {
+	if len(items) == 0 {
+		return nil
+	}
+	sortedItems := append([]labeledScore(nil), items...)
+	sort.SliceStable(sortedItems, func(i, j int) bool {
+		if sortedItems[i].Score == sortedItems[j].Score {
+			return sortedItems[i].CaseID < sortedItems[j].CaseID
+		}
+		return sortedItems[i].Score < sortedItems[j].Score
+	})
+
+	pos, neg := 0, 0
+	for _, item := range sortedItems {
+		if isPositiveMetricLabel(item.Label, positiveSet) {
+			pos++
+		} else {
+			neg++
+		}
+	}
+	if pos == 0 || neg == 0 {
+		return nil
+	}
+
+	sumPositiveRanks := 0.0
+	for i := 0; i < len(sortedItems); {
+		j := i + 1
+		for j < len(sortedItems) && sortedItems[j].Score == sortedItems[i].Score {
+			j++
+		}
+		averageRank := (float64(i+1) + float64(j)) / 2.0
+		for k := i; k < j; k++ {
+			if isPositiveMetricLabel(sortedItems[k].Label, positiveSet) {
+				sumPositiveRanks += averageRank
+			}
+		}
+		i = j
+	}
+
+	value := (sumPositiveRanks - float64(pos*(pos+1))/2.0) / float64(pos*neg)
+	return &value
+}
+
+func prAUCMetric(items []labeledScore, positiveSet map[string]struct{}) *float64 {
+	if len(items) == 0 {
+		return nil
+	}
+	sortedItems := append([]labeledScore(nil), items...)
+	sort.SliceStable(sortedItems, func(i, j int) bool {
+		if sortedItems[i].Score == sortedItems[j].Score {
+			return sortedItems[i].CaseID < sortedItems[j].CaseID
+		}
+		return sortedItems[i].Score > sortedItems[j].Score
+	})
+	totalPositive := 0
+	for _, item := range sortedItems {
+		if isPositiveMetricLabel(item.Label, positiveSet) {
+			totalPositive++
+		}
+	}
+	if totalPositive == 0 {
+		return nil
+	}
+	positiveSeen := 0
+	precisionSum := 0.0
+	for idx, item := range sortedItems {
+		if !isPositiveMetricLabel(item.Label, positiveSet) {
+			continue
+		}
+		positiveSeen++
+		precisionSum += float64(positiveSeen) / float64(idx+1)
+	}
+	value := precisionSum / float64(totalPositive)
+	return &value
+}
+
+func isPositiveMetricLabel(label string, positiveSet map[string]struct{}) bool {
+	_, ok := positiveSet[normalizeLabelForMetrics(label)]
+	return ok
+}
+
+func normalizeLabelForMetrics(raw string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(strings.ToLower(strings.TrimSpace(raw)), "-", "_"), " ", "_")
+}
+
+func mostCommonString(counts map[string]int) string {
+	if len(counts) == 0 {
+		return ""
+	}
+	type pair struct {
+		value string
+		count int
+	}
+	pairs := make([]pair, 0, len(counts))
+	for value, count := range counts {
+		pairs = append(pairs, pair{value: value, count: count})
+	}
+	sort.SliceStable(pairs, func(i, j int) bool {
+		if pairs[i].count == pairs[j].count {
+			return pairs[i].value < pairs[j].value
+		}
+		return pairs[i].count > pairs[j].count
+	})
+	return pairs[0].value
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func dedupeStrings(values []string) []string {

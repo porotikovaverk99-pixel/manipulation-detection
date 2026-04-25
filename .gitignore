@@ -79,6 +79,8 @@ build/
 *.sqlite3
 *.dump
 *.pgdump
+!/backend/db_snapshots/
+!/backend/db_snapshots/*.pgdump
 
 # --- Датасеты и replay артефакты ---
 /data/raw/

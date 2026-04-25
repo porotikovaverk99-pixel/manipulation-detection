@@ -112,7 +112,54 @@ curl 'http://localhost:8080/api/ingestion/runs?limit=10'
 curl 'http://localhost:8080/api/analysis/summary?source_type=dataset&dataset_name=sample&dataset_split=dev'
 ```
 
-## 6. Case Model Scores
+Case-level frontend API checks:
+
+```bash
+curl 'http://localhost:8080/api/cases?source_name=pheme_large&dataset_name=pheme&dataset_split=eventcv_large&scorer_key=case_ensemble_v1&limit=5'
+curl 'http://localhost:8080/api/cases/236?scorer_key=case_ensemble_v1'
+curl 'http://localhost:8080/api/cases/236/scores'
+curl 'http://localhost:8080/api/model-comparison?source_name=pheme_large&dataset_name=pheme&dataset_split=eventcv_large&top_k=5'
+```
+
+Endpoint purpose:
+
+- `GET /api/cases` returns the case queue. Optional `scorer_key` switches the displayed score from active `case_scores` to a selected `case_model_scores` row such as `case_ensemble_v1`.
+- `GET /api/cases/{id}` returns case metadata, root post, posts/replies, accounts, artifacts and feature snapshot.
+- `GET /api/cases/{id}/scores` returns all model-specific scores for one case.
+- `GET /api/model-comparison` computes model metrics from `case_model_scores` for the selected dataset slice.
+
+## 6. Backend tests
+
+From `backend`:
+
+```bash
+go test ./...
+```
+
+From the repository root:
+
+```bash
+make backend-test
+```
+
+Current fast test coverage includes:
+
+- case-level handler contract tests without a real database;
+- query parameter validation for case list and model comparison endpoints;
+- HTTP status mapping for invalid input and repository errors;
+- model metric unit tests for `Precision@K`, threshold metrics, `ROC-AUC` and `PR-AUC`.
+
+## 7. Frontend DB snapshot
+
+For frontend work on a weak laptop, use a prepared PostgreSQL snapshot instead of running dataset loaders and ML scorers.
+
+See:
+
+```text
+backend/docs/frontend_db_snapshot.md
+```
+
+## 8. Case Model Scores
 
 The project keeps `case_scores` as the active score used by existing API/UI paths. Multiple model outputs are stored separately in `case_model_scores`.
 

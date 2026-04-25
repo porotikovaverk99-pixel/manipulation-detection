@@ -84,6 +84,9 @@ func (a *App) setupRoutes() {
 	a.server.Get("/api/analysis/summary", a.corsMiddleware(a.analysisHandler.Summary()))
 	a.server.Get("/api/ingestion/runs", a.corsMiddleware(a.ingestHandler.ListRuns()))
 	a.server.Get("/api/cases", a.corsMiddleware(a.casesHandler.List()))
+	a.server.Get("/api/cases/{id}", a.corsMiddleware(a.casesHandler.Detail()))
+	a.server.Get("/api/cases/{id}/scores", a.corsMiddleware(a.casesHandler.Scores()))
+	a.server.Get("/api/model-comparison", a.corsMiddleware(a.casesHandler.ModelComparison()))
 
 	// Добавляем CORS для фронтенда
 	a.server.Handle("/api/", a.corsMiddleware(a.analyzeHandler.Analyze()))
@@ -121,6 +124,9 @@ func (a *App) Run() error {
 		log.Printf("  GET  /api/analysis/summary")
 		log.Printf("  GET  /api/ingestion/runs")
 		log.Printf("  GET  /api/cases")
+		log.Printf("  GET  /api/cases/{id}")
+		log.Printf("  GET  /api/cases/{id}/scores")
+		log.Printf("  GET  /api/model-comparison")
 
 		if err := a.server.Run(); err != nil && err != http.ErrServerClosed {
 			serverErr <- err
