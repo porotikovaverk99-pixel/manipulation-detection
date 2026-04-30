@@ -8,12 +8,16 @@ import (
 	"github.com/porotikovaverk99-pixel/manipulation-detection/backend/internal/repository"
 )
 
-// AnalysisHandler отдает агрегаты по результатам batch/live анализа.
-type AnalysisHandler struct {
-	repo *repository.PostgresDB
+type analysisRepository interface {
+	GetAnalysisSummary(repository.AnalysisPostFilter) (repository.AnalysisSummary, error)
 }
 
-func NewAnalysisHandler(repo *repository.PostgresDB) *AnalysisHandler {
+// AnalysisHandler отдает агрегаты по результатам batch/live анализа.
+type AnalysisHandler struct {
+	repo analysisRepository
+}
+
+func NewAnalysisHandler(repo analysisRepository) *AnalysisHandler {
 	return &AnalysisHandler{repo: repo}
 }
 

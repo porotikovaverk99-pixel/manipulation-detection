@@ -8,12 +8,21 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
+	"github.com/porotikovaverk99-pixel/manipulation-detection/backend/internal/audittrail"
 	"github.com/porotikovaverk99-pixel/manipulation-detection/backend/internal/collector"
+	applog "github.com/porotikovaverk99-pixel/manipulation-detection/backend/internal/logger"
 	"github.com/porotikovaverk99-pixel/manipulation-detection/backend/internal/repository"
 )
 
 func main() {
 	_ = godotenv.Load()
+	logFile, err := applog.ConfigureStandardLog("dataset_analyzer")
+	if err != nil {
+		log.Printf("configure file logging failed: %v", err)
+	}
+	if logFile != nil {
+		defer logFile.Close()
+	}
 
 	connStr := os.Getenv("DATABASE_URL")
 	if connStr == "" {
@@ -37,22 +46,35 @@ func main() {
 		Limit:          getenvInt("BATCH_LIMIT", 100),
 	}
 
+	job := audittrail.NewCLIJob(db, "dataset_analyzer").
+		WithSource(filter.SourceType, "", filter.DatasetName, filter.DatasetSplit).
+		WithPayload(map[string]interface{}{
+			"batch_limit":     filter.Limit,
+			"only_unanalyzed": filter.OnlyUnanalyzed,
+		})
+	job.Start()
+	defer job.FinishAndExit()
+
 	if rawRunID := strings.TrimSpace(os.Getenv("INGESTION_RUN_ID")); rawRunID != "" {
 		runID, err := strconv.ParseInt(rawRunID, 10, 64)
 		if err != nil || runID <= 0 {
-			log.Fatalf("invalid INGESTION_RUN_ID: %q", rawRunID)
+			job.Failf("invalid INGESTION_RUN_ID: %q", rawRunID)
+			return
 		}
 		filter.IngestionRunID = &runID
+		job.Set("ingestion_run_id", runID)
 	}
 
 	posts, err := db.GetPostsForAnalysis(filter)
 	if err != nil {
-		log.Fatalf("get posts for analysis failed: %v", err)
-	}
-	if len(posts) == 0 {
-		log.Println("no posts found for analysis")
+		job.Failf("get posts for analysis failed: %v", err)
 		return
 	}
+	if len(posts) == 0 {
+		job.Skipf("no posts found for analysis")
+		return
+	}
+	job.Set("selected_posts", len(posts))
 
 	mlURL := getenvDefault("ML_SERVICE_URL", "http://localhost:8000")
 	mlClient := collector.NewMLClient(mlURL)
@@ -131,6 +153,13 @@ func main() {
 		log.Printf("analysis summary failed: %v", err)
 	}
 
+	job.Set("processed", processed)
+	job.Set("failed", failed)
+	job.Set("high", high)
+	job.Set("medium", medium)
+	job.Set("low", low)
+	job.Set("total_analyzed", summary.TotalAnalyzed)
+	job.Set("average_score", summary.AverageScore)
 	log.Printf(
 		"dataset analyzer finished: processed=%d failed=%d high=%d medium=%d low=%d duration=%s total_analyzed=%d avg_score=%.3f",
 		processed,

@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
+	"github.com/porotikovaverk99-pixel/manipulation-detection/backend/internal/audittrail"
+	applog "github.com/porotikovaverk99-pixel/manipulation-detection/backend/internal/logger"
 	"github.com/porotikovaverk99-pixel/manipulation-detection/backend/internal/repository"
 )
 
@@ -80,6 +82,13 @@ type phemeTweet struct {
 
 func main() {
 	_ = godotenv.Load()
+	logFile, err := applog.ConfigureStandardLog("pheme_loader")
+	if err != nil {
+		log.Printf("configure file logging failed: %v", err)
+	}
+	if logFile != nil {
+		defer logFile.Close()
+	}
 
 	archivePath := strings.TrimSpace(os.Getenv("PHEME_ARCHIVE_PATH"))
 	if archivePath == "" {
@@ -114,15 +123,27 @@ func main() {
 	}
 	defer db.Close()
 
+	job := audittrail.NewCLIJob(db, "pheme_loader").
+		WithSource("dataset", sourceName, datasetName, datasetSplit).
+		WithPayload(map[string]interface{}{
+			"archive_path": archivePath,
+			"case_limit":   caseLimit,
+		})
+	job.Start()
+	defer job.FinishAndExit()
+
 	sourceID, err := db.EnsureDataSource(sourceName, "")
 	if err != nil {
-		log.Fatalf("ensure data source failed: %v", err)
+		job.Failf("ensure data source failed: %v", err)
+		return
 	}
 
 	runID, err := db.StartIngestionRun("dataset", sourceName, datasetName, datasetSplit)
 	if err != nil {
-		log.Fatalf("start ingestion run failed: %v", err)
+		job.Failf("start ingestion run failed: %v", err)
+		return
 	}
+	job.Set("ingestion_run_id", runID)
 
 	runStatus := "completed"
 	runNotes := "ok"
@@ -142,7 +163,8 @@ func main() {
 	if err != nil {
 		runStatus = "failed"
 		runNotes = "read archive failed: " + err.Error()
-		log.Fatal(runNotes)
+		job.Failf("%s", runNotes)
+		return
 	}
 
 	for _, c := range cases {
@@ -150,12 +172,16 @@ func main() {
 		if err != nil {
 			runStatus = "failed"
 			runNotes = fmt.Sprintf("persist case %s failed: %v", c.CaseExternalID, err)
-			log.Fatal(runNotes)
+			job.Failf("%s", runNotes)
+			return
 		}
 		persistedCases++
 		persistedPosts += postCount
 	}
 
+	job.Set("persisted_cases", persistedCases)
+	job.Set("persisted_posts", persistedPosts)
+	job.Set("run_status", runStatus)
 	log.Printf("pheme loader completed: cases=%d posts=%d run_id=%d", persistedCases, persistedPosts, runID)
 }
 

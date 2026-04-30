@@ -464,6 +464,23 @@ type EvaluationRunRecord struct {
 	Notes         string
 }
 
+// AuditEventRecord хранит один persistent audit event для API/pipeline действий.
+type AuditEventRecord struct {
+	ActorType    string
+	ActorID      string
+	Action       string
+	EntityType   string
+	EntityID     string
+	Status       string
+	RequestID    string
+	SourceType   string
+	SourceName   string
+	DatasetName  string
+	DatasetSplit string
+	Payload      map[string]interface{}
+	ErrorMessage string
+}
+
 // PostgresDB представляет подключение к PostgreSQL.
 type PostgresDB struct {
 	db *sql.DB
@@ -487,6 +504,11 @@ func NewPostgresDB(connStr string) (*PostgresDB, error) {
 // Close закрывает соединение с базой данных.
 func (p *PostgresDB) Close() error {
 	return p.db.Close()
+}
+
+// Ping проверяет доступность БД для health-check endpoint-ов.
+func (p *PostgresDB) Ping() error {
+	return p.db.Ping()
 }
 
 // EnsureDataSource возвращает id источника данных, создавая его при необходимости.
@@ -871,6 +893,71 @@ func (p *PostgresDB) FinishIngestionRun(runID int64, status, notes string) error
 		return fmt.Errorf("finish ingestion run: %w", err)
 	}
 	return nil
+}
+
+// SaveAuditEvent сохраняет persistent audit event.
+func (p *PostgresDB) SaveAuditEvent(event AuditEventRecord) (int64, error) {
+	if strings.TrimSpace(event.ActorType) == "" {
+		event.ActorType = "system"
+	}
+	if strings.TrimSpace(event.Status) == "" {
+		event.Status = "succeeded"
+	}
+	if strings.TrimSpace(event.Action) == "" {
+		return 0, fmt.Errorf("audit event action is required")
+	}
+	if event.Payload == nil {
+		event.Payload = map[string]interface{}{}
+	}
+
+	payloadJSON, err := json.Marshal(event.Payload)
+	if err != nil {
+		return 0, fmt.Errorf("marshal audit payload: %w", err)
+	}
+
+	var id int64
+	err = p.db.QueryRow(`
+		INSERT INTO audit_events (
+			actor_type,
+			actor_id,
+			action,
+			entity_type,
+			entity_id,
+			status,
+			request_id,
+			source_type,
+			source_name,
+			dataset_name,
+			dataset_split,
+			payload,
+			error_message
+		)
+		VALUES (
+			$1, NULLIF($2, ''), $3, NULLIF($4, ''), NULLIF($5, ''), $6,
+			NULLIF($7, ''), NULLIF($8, ''), NULLIF($9, ''), NULLIF($10, ''),
+			NULLIF($11, ''), $12, NULLIF($13, '')
+		)
+		RETURNING id
+	`,
+		event.ActorType,
+		event.ActorID,
+		event.Action,
+		event.EntityType,
+		event.EntityID,
+		event.Status,
+		event.RequestID,
+		event.SourceType,
+		event.SourceName,
+		event.DatasetName,
+		event.DatasetSplit,
+		payloadJSON,
+		event.ErrorMessage,
+	).Scan(&id)
+	if err != nil {
+		return 0, fmt.Errorf("save audit event: %w", err)
+	}
+
+	return id, nil
 }
 
 // GetIngestionRuns возвращает последние ingestion/replay запуски с количеством постов.

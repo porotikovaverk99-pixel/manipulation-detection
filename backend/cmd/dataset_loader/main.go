@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
+	"github.com/porotikovaverk99-pixel/manipulation-detection/backend/internal/audittrail"
+	applog "github.com/porotikovaverk99-pixel/manipulation-detection/backend/internal/logger"
 	"github.com/porotikovaverk99-pixel/manipulation-detection/backend/internal/repository"
 )
 
@@ -19,6 +21,13 @@ type datasetRow map[string]interface{}
 
 func main() {
 	_ = godotenv.Load()
+	logFile, err := applog.ConfigureStandardLog("dataset_loader")
+	if err != nil {
+		log.Printf("configure file logging failed: %v", err)
+	}
+	if logFile != nil {
+		defer logFile.Close()
+	}
 
 	datasetPath := os.Getenv("DATASET_PATH")
 	if datasetPath == "" {
@@ -46,15 +55,26 @@ func main() {
 	}
 	defer db.Close()
 
+	job := audittrail.NewCLIJob(db, "dataset_loader").
+		WithSource("dataset", sourceName, datasetName, datasetSplit).
+		WithPayload(map[string]interface{}{
+			"dataset_path": datasetPath,
+		})
+	job.Start()
+	defer job.FinishAndExit()
+
 	sourceID, err := db.EnsureDataSource(sourceName, "")
 	if err != nil {
-		log.Fatalf("ensure data source failed: %v", err)
+		job.Failf("ensure data source failed: %v", err)
+		return
 	}
 
 	runID, err := db.StartIngestionRun("dataset", sourceName, datasetName, datasetSplit)
 	if err != nil {
-		log.Fatalf("start ingestion run failed: %v", err)
+		job.Failf("start ingestion run failed: %v", err)
+		return
 	}
+	job.Set("ingestion_run_id", runID)
 
 	processed := 0
 	failed := 0
@@ -74,7 +94,7 @@ func main() {
 	if err != nil {
 		runStatus = "failed"
 		runNotes = "open dataset failed: " + err.Error()
-		log.Printf("%s", runNotes)
+		job.Failf("%s", runNotes)
 		return
 	}
 	defer f.Close()
@@ -107,10 +127,13 @@ func main() {
 	if err := scanner.Err(); err != nil {
 		runStatus = "failed"
 		runNotes = "scan dataset failed: " + err.Error()
-		log.Printf("%s", runNotes)
+		job.Failf("%s", runNotes)
 		return
 	}
 
+	job.Set("processed", processed)
+	job.Set("failed_rows", failed)
+	job.Set("run_status", runStatus)
 	log.Printf("dataset ingestion completed: processed=%d failed=%d run_id=%d", processed, failed, runID)
 }
 

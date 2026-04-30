@@ -14,6 +14,8 @@ import (
 	"unicode"
 
 	"github.com/joho/godotenv"
+	"github.com/porotikovaverk99-pixel/manipulation-detection/backend/internal/audittrail"
+	applog "github.com/porotikovaverk99-pixel/manipulation-detection/backend/internal/logger"
 	"github.com/porotikovaverk99-pixel/manipulation-detection/backend/internal/repository"
 )
 
@@ -25,6 +27,13 @@ var (
 
 func main() {
 	_ = godotenv.Load()
+	logFile, err := applog.ConfigureStandardLog("case_scorer")
+	if err != nil {
+		log.Printf("configure file logging failed: %v", err)
+	}
+	if logFile != nil {
+		defer logFile.Close()
+	}
 
 	connStr := strings.TrimSpace(os.Getenv("DATABASE_URL"))
 	if connStr == "" {
@@ -52,31 +61,50 @@ func main() {
 	}
 	defer db.Close()
 
+	job := audittrail.NewCLIJob(db, "case_scorer").
+		WithSource("dataset", filter.SourceName, filter.DatasetName, filter.DatasetSplit).
+		WithPayload(map[string]interface{}{
+			"case_limit":      filter.Limit,
+			"case_label":      filter.Label,
+			"only_unscored":   filter.OnlyUnscored,
+			"feature_version": featureVersion,
+			"score_version":   scoreVersion,
+			"pipeline_hash":   pipelineHash,
+		})
+	job.Start()
+	defer job.FinishAndExit()
+
 	cases, err := db.GetCasesForScoring(filter)
 	if err != nil {
-		log.Fatalf("load cases for scoring failed: %v", err)
-	}
-	if len(cases) == 0 {
-		log.Printf("no cases selected for scoring")
+		job.Failf("load cases for scoring failed: %v", err)
 		return
 	}
+	if len(cases) == 0 {
+		job.Skipf("no cases selected for scoring")
+		return
+	}
+	job.Set("selected_cases", len(cases))
 
 	scored := 0
 	for _, c := range cases {
 		features, score := scoreCase(c, featureVersion, scoreVersion, pipelineHash)
 		if err := db.SaveCaseFeatures(features); err != nil {
-			log.Fatalf("save features for case %d failed: %v", c.ID, err)
+			job.Failf("save features for case %d failed: %v", c.ID, err)
+			return
 		}
 		if err := db.SaveCaseScore(score); err != nil {
-			log.Fatalf("save score for case %d failed: %v", c.ID, err)
+			job.Failf("save score for case %d failed: %v", c.ID, err)
+			return
 		}
 		if err := db.SaveCaseModelScore(caseModelScore(c.ID, score)); err != nil {
-			log.Fatalf("save model score for case %d failed: %v", c.ID, err)
+			job.Failf("save model score for case %d failed: %v", c.ID, err)
+			return
 		}
 		scored++
 		log.Printf("scored case=%d external_case_id=%s risk=%.3f level=%s", c.ID, c.ExternalCaseID, score.RiskScore, score.RiskLevel)
 	}
 
+	job.Set("scored_cases", scored)
 	log.Printf("case scorer completed: scored=%d", scored)
 }
 

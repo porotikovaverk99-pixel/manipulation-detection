@@ -19,6 +19,7 @@ vendor/
 *.dSYM/
 __debug_bin
 *.log
+/logs/
 
 # Бинарники проекта
 /backend/api

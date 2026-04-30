@@ -8,7 +8,9 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
+	"github.com/porotikovaverk99-pixel/manipulation-detection/backend/internal/audittrail"
 	"github.com/porotikovaverk99-pixel/manipulation-detection/backend/internal/collector"
+	applog "github.com/porotikovaverk99-pixel/manipulation-detection/backend/internal/logger"
 	"github.com/porotikovaverk99-pixel/manipulation-detection/backend/internal/repository"
 )
 
@@ -19,6 +21,13 @@ const (
 
 func main() {
 	_ = godotenv.Load()
+	logFile, err := applog.ConfigureStandardLog("case_ml_scorer")
+	if err != nil {
+		log.Printf("configure file logging failed: %v", err)
+	}
+	if logFile != nil {
+		defer logFile.Close()
+	}
 
 	connStr := strings.TrimSpace(os.Getenv("DATABASE_URL"))
 	if connStr == "" {
@@ -50,16 +59,31 @@ func main() {
 	}
 	defer db.Close()
 
+	job := audittrail.NewCLIJob(db, "case_ml_scorer").
+		WithSource("dataset", filter.SourceName, filter.DatasetName, filter.DatasetSplit).
+		WithPayload(map[string]interface{}{
+			"case_limit":    filter.Limit,
+			"case_label":    filter.Label,
+			"only_unscored": filter.OnlyUnscored,
+			"scorers":       strings.Join(scorers, ","),
+			"model_keys":    strings.Join(modelScoreKeys, ","),
+		})
+	job.Start()
+	defer job.FinishAndExit()
+
 	cases, err := db.GetCasesForScoring(filter)
 	if err != nil {
-		log.Fatalf("load cases for ML scoring failed: %v", err)
-	}
-	if len(cases) == 0 {
-		log.Printf("no cases selected for ML scoring")
+		job.Failf("load cases for ML scoring failed: %v", err)
 		return
 	}
+	if len(cases) == 0 {
+		job.Skipf("no cases selected for ML scoring")
+		return
+	}
+	job.Set("selected_cases", len(cases))
 
 	mlURL := getenvDefault("ML_SERVICE_URL", "http://localhost:8000")
+	job.Set("ml_service_url", mlURL)
 	mlClient := collector.NewMLClient(mlURL)
 
 	processed := 0
@@ -135,6 +159,11 @@ func main() {
 		failed,
 		time.Since(started).Round(time.Millisecond),
 	)
+	job.Set("processed", processed)
+	job.Set("failed", failed)
+	if processed == 0 && failed > 0 {
+		job.Failf("case ML scorer failed for all selected cases: failed=%d", failed)
+	}
 }
 
 func saveFeatureScore(db *repository.PostgresDB, c repository.CaseForScoring, resp *collector.CaseMLResponse, mlURL string) error {

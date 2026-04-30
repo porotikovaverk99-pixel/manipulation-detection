@@ -108,6 +108,7 @@ go run ./cmd/api
 Then:
 
 ```bash
+curl 'http://localhost:8080/health'
 curl 'http://localhost:8080/api/ingestion/runs?limit=10'
 curl 'http://localhost:8080/api/analysis/summary?source_type=dataset&dataset_name=sample&dataset_split=dev'
 ```
@@ -127,8 +128,68 @@ Endpoint purpose:
 - `GET /api/cases/{id}` returns case metadata, root post, posts/replies, accounts, artifacts and feature snapshot.
 - `GET /api/cases/{id}/scores` returns all model-specific scores for one case.
 - `GET /api/model-comparison` computes model metrics from `case_model_scores` for the selected dataset slice.
+- `GET /health` checks backend readiness, PostgreSQL connectivity and ML service `/health`.
 
-## 6. Backend tests
+## 6. Persistent audit events
+
+The API writes persistent audit events to `audit_events`.
+
+Each HTTP request records:
+
+- `request_id`;
+- endpoint path;
+- HTTP method and status;
+- response size;
+- duration;
+- remote address and user agent;
+- normalized audit status: `succeeded`, `skipped` or `failed`.
+
+This is separate from `collection_logs`. `collection_logs` is source-collection-specific; `audit_events` is a general operational trace for API and pipeline actions.
+
+CLI commands also write audit events:
+
+- `cmd/api` records API process lifecycle as `cli.api`.
+- `cmd/db_migrate` records migration command result as `cli.db_migrate`.
+- `cmd/dataset_loader` records generic JSONL ingestion as `cli.dataset_loader`.
+- `cmd/pheme_loader` records PHEME ingestion as `cli.pheme_loader`.
+- `cmd/dataset_analyzer` records post-level ML analysis runs as `cli.dataset_analyzer`.
+- `cmd/case_scorer` records feature-based case scoring as `cli.case_scorer`.
+- `cmd/case_ml_scorer` records ML-backed case scoring as `cli.case_ml_scorer`.
+- `cmd/evaluate_cases` records evaluation runs as `cli.evaluate_cases`.
+- `cmd/export_top_cases` records JSON export runs as `cli.export_top_cases`.
+- `cmd/collector` records live collector lifecycle as `cli.collector` and each collection cycle as `cli.collector_collect_all`.
+
+## 7. Runtime file logs
+
+Runtime file logs are optional. They are separate from `audit_events`.
+
+Use:
+
+```bash
+LOG_TO_FILE=true \
+LOG_DIR=./logs \
+DATABASE_URL='postgres://postgres:password@localhost:5432/manipulation_detection?sslmode=disable' \
+go run ./cmd/api
+```
+
+By default each component writes to its own file:
+
+- `logs/api.log`
+- `logs/db_migrate.log`
+- `logs/dataset_loader.log`
+- `logs/pheme_loader.log`
+- `logs/dataset_analyzer.log`
+- `logs/case_scorer.log`
+- `logs/case_ml_scorer.log`
+- `logs/evaluate_cases.log`
+- `logs/export_top_cases.log`
+- `logs/collector.log`
+
+Set `LOG_FILE=custom.log` if one process should write to a specific file.
+Logs are still written to stderr, so Docker Desktop and terminal output continue to work.
+The `logs/` directories and `*.log` files are ignored by Git.
+
+## 8. Backend tests
 
 From `backend`:
 
@@ -142,14 +203,28 @@ From the repository root:
 make backend-test
 ```
 
+Optional PostgreSQL integration smoke test:
+
+```bash
+make db-up
+make db-migrate
+make backend-integration-test
+```
+
+This test is opt-in. It uses `RUN_DB_INTEGRATION_TESTS=1`, writes temporary `ingestion_runs` and `audit_events` rows, verifies repository round trips, and removes the rows.
+
 Current fast test coverage includes:
 
 - case-level handler contract tests without a real database;
 - query parameter validation for case list and model comparison endpoints;
+- ingestion and analysis handler contract tests;
+- health check handler tests for PostgreSQL and ML service status mapping;
+- persistent audit middleware tests;
+- structured HTTP logger middleware tests;
 - HTTP status mapping for invalid input and repository errors;
 - model metric unit tests for `Precision@K`, threshold metrics, `ROC-AUC` and `PR-AUC`.
 
-## 7. Frontend DB snapshot
+## 9. Frontend DB snapshot
 
 For frontend work on a weak laptop, use a prepared PostgreSQL snapshot instead of running dataset loaders and ML scorers.
 
@@ -159,7 +234,7 @@ See:
 backend/docs/frontend_db_snapshot.md
 ```
 
-## 8. Case Model Scores
+## 10. Case Model Scores
 
 The project keeps `case_scores` as the active score used by existing API/UI paths. Multiple model outputs are stored separately in `case_model_scores`.
 

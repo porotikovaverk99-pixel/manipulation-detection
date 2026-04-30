@@ -9,13 +9,22 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
+	"github.com/porotikovaverk99-pixel/manipulation-detection/backend/internal/audittrail"
 	"github.com/porotikovaverk99-pixel/manipulation-detection/backend/internal/collector"
+	applog "github.com/porotikovaverk99-pixel/manipulation-detection/backend/internal/logger"
 	"github.com/porotikovaverk99-pixel/manipulation-detection/backend/internal/repository"
 )
 
 func main() {
 	if err := godotenv.Load(); err != nil {
 		log.Println("Файл .env не найден, используем переменные окружения")
+	}
+	logFile, err := applog.ConfigureStandardLog("collector")
+	if err != nil {
+		log.Printf("configure file logging failed: %v", err)
+	}
+	if logFile != nil {
+		defer logFile.Close()
 	}
 
 	connStr := os.Getenv("DATABASE_URL")
@@ -58,6 +67,18 @@ func main() {
 
 	c := collector.NewCollector(db, cfg)
 
+	job := audittrail.NewCLIJob(db, "collector").
+		WithSource("live", "mastodon", "", "").
+		WithPayload(map[string]interface{}{
+			"mastodon_base_url":        mastodonBaseURL,
+			"collect_interval_seconds": int(cfg.CollectInterval.Seconds()),
+			"limit_per_request":        cfg.LimitPerRequest,
+			"ml_url":                   mlURL,
+			"token_configured":         mastodonToken != "",
+		})
+	job.Start()
+	defer job.FinishAndExit()
+
 	stopChan := make(chan os.Signal, 1)
 	signal.Notify(stopChan, syscall.SIGINT, syscall.SIGTERM)
 
@@ -65,14 +86,23 @@ func main() {
 
 	go func() {
 		for {
+			cycle := audittrail.NewCLIJob(db, "collector_collect_all").
+				WithSource("live", "mastodon", "", "").
+				WithPayload(map[string]interface{}{
+					"mastodon_base_url": mastodonBaseURL,
+					"limit_per_request": cfg.LimitPerRequest,
+				})
+			cycle.Start()
 			if err := c.CollectAll(); err != nil {
-				log.Printf("❌ Ошибка при сборе: %v", err)
+				cycle.Failf("collector collect all failed: %v", err)
 			}
+			cycle.Finish()
 			log.Printf("⏳ Следующий запуск через %v", cfg.CollectInterval)
 			time.Sleep(cfg.CollectInterval)
 		}
 	}()
 
 	<-stopChan
+	job.Set("stop_signal", "received")
 	log.Println("👋 Остановка сборщика данных")
 }

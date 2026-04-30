@@ -4,7 +4,7 @@ POSTGRES_DB ?= manipulation_detection
 POSTGRES_USER ?= postgres
 DATABASE_URL ?= postgres://postgres:password@localhost:5432/manipulation_detection?sslmode=disable
 
-.PHONY: db-up db-down db-reset db-logs db-shell db-migrate db-status db-version db-down-migration backend-test ml-venv ml-install py-check
+.PHONY: db-up db-down db-reset db-logs db-shell db-migrate db-status db-version db-down-migration backend-test backend-integration-test ml-venv ml-install py-check
 
 db-up:
 	$(COMPOSE) up -d --wait $(POSTGRES_SERVICE)
@@ -37,6 +37,9 @@ db-down-migration:
 
 backend-test:
 	cd backend && go test ./...
+
+backend-integration-test:
+	cd backend && RUN_DB_INTEGRATION_TESTS=1 DATABASE_URL='$(DATABASE_URL)' go test ./internal/repository -run Integration -count=1
 
 ml-venv:
 	cd ml && python3 -m venv .venv

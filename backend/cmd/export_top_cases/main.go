@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
+	"github.com/porotikovaverk99-pixel/manipulation-detection/backend/internal/audittrail"
+	applog "github.com/porotikovaverk99-pixel/manipulation-detection/backend/internal/logger"
 	"github.com/porotikovaverk99-pixel/manipulation-detection/backend/internal/repository"
 )
 
@@ -25,6 +27,13 @@ type exportPayload struct {
 
 func main() {
 	_ = godotenv.Load()
+	logFile, err := applog.ConfigureStandardLog("export_top_cases")
+	if err != nil {
+		log.Printf("configure file logging failed: %v", err)
+	}
+	if logFile != nil {
+		defer logFile.Close()
+	}
 
 	connStr := strings.TrimSpace(os.Getenv("DATABASE_URL"))
 	if connStr == "" {
@@ -55,10 +64,23 @@ func main() {
 	}
 	defer db.Close()
 
+	job := audittrail.NewCLIJob(db, "export_top_cases").
+		WithSource("dataset", filter.SourceName, filter.DatasetName, filter.DatasetSplit).
+		WithPayload(map[string]interface{}{
+			"export_limit":   filter.Limit,
+			"case_label":     filter.Label,
+			"min_risk_score": minRiskScore,
+			"output_path":    outPath,
+		})
+	job.Start()
+	defer job.FinishAndExit()
+
 	items, err := db.ListScoredCases(filter)
 	if err != nil {
-		log.Fatalf("load scored cases failed: %v", err)
+		job.Failf("load scored cases failed: %v", err)
+		return
 	}
+	job.Set("selected_cases", len(items))
 
 	filtered := make([]repository.ScoredCaseItem, 0, len(items))
 	for _, item := range items {
@@ -81,19 +103,23 @@ func main() {
 
 	data, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
-		log.Fatalf("marshal export payload failed: %v", err)
+		job.Failf("marshal export payload failed: %v", err)
+		return
 	}
 
 	parent := filepathDir(outPath)
 	if parent != "" && parent != "." {
 		if err := os.MkdirAll(parent, 0o755); err != nil {
-			log.Fatalf("create output directory failed: %v", err)
+			job.Failf("create output directory failed: %v", err)
+			return
 		}
 	}
 	if err := os.WriteFile(outPath, append(data, '\n'), 0o644); err != nil {
-		log.Fatalf("write export file failed: %v", err)
+		job.Failf("write export file failed: %v", err)
+		return
 	}
 
+	job.Set("exported_cases", len(filtered))
 	log.Printf("exported top cases: count=%d path=%s", len(filtered), outPath)
 }
 

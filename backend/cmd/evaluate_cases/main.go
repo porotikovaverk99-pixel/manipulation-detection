@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
+	"github.com/porotikovaverk99-pixel/manipulation-detection/backend/internal/audittrail"
+	applog "github.com/porotikovaverk99-pixel/manipulation-detection/backend/internal/logger"
 	"github.com/porotikovaverk99-pixel/manipulation-detection/backend/internal/repository"
 )
 
@@ -49,6 +51,13 @@ type evaluationSummary struct {
 
 func main() {
 	_ = godotenv.Load()
+	logFile, err := applog.ConfigureStandardLog("evaluate_cases")
+	if err != nil {
+		log.Printf("configure file logging failed: %v", err)
+	}
+	if logFile != nil {
+		defer logFile.Close()
+	}
 
 	connStr := strings.TrimSpace(os.Getenv("DATABASE_URL"))
 	if connStr == "" {
@@ -77,13 +86,29 @@ func main() {
 	}
 	defer db.Close()
 
+	job := audittrail.NewCLIJob(db, "evaluate_cases").
+		WithSource("dataset", filter.SourceName, filter.DatasetName, filter.DatasetSplit).
+		WithPayload(map[string]interface{}{
+			"eval_limit":          filter.Limit,
+			"case_label":          filter.Label,
+			"positive_labels":     sortedKeys(positiveLabels),
+			"risk_threshold":      threshold,
+			"save_evaluation_run": saveRun,
+			"output_path":         outPath,
+		})
+	job.Start()
+	defer job.FinishAndExit()
+
 	cases, err := db.ListScoredCases(filter)
 	if err != nil {
-		log.Fatalf("load scored cases failed: %v", err)
+		job.Failf("load scored cases failed: %v", err)
+		return
 	}
 	if len(cases) == 0 {
-		log.Fatalf("no scored cases found for evaluation")
+		job.Skipf("no scored cases found for evaluation")
+		return
 	}
+	job.Set("scored_cases", len(cases))
 
 	labeled := make([]repository.ScoredCaseItem, 0, len(cases))
 	for _, item := range cases {
@@ -93,8 +118,10 @@ func main() {
 		labeled = append(labeled, item)
 	}
 	if len(labeled) == 0 {
-		log.Fatalf("no labeled scored cases found for evaluation")
+		job.Skipf("no labeled scored cases found for evaluation")
+		return
 	}
+	job.Set("labeled_cases", len(labeled))
 
 	sort.SliceStable(labeled, func(i, j int) bool {
 		if labeled[i].RiskScore == labeled[j].RiskScore {
@@ -190,14 +217,21 @@ func main() {
 			Notes: getenvDefault("EVALUATION_NOTES", "case-level evaluation"),
 		})
 		if err != nil {
-			log.Fatalf("save evaluation run failed: %v", err)
+			job.Failf("save evaluation run failed: %v", err)
+			return
 		}
 		summary.EvaluationRunID = runID
+		job.Set("evaluation_run_id", runID)
 	}
 
 	if err := writeSummary(summary, outPath); err != nil {
-		log.Fatalf("write summary failed: %v", err)
+		job.Failf("write summary failed: %v", err)
+		return
 	}
+	job.Set("positive_cases", positives)
+	job.Set("negative_cases", negatives)
+	job.Set("roc_auc", rocAUC)
+	job.Set("pr_auc", prAUC)
 }
 
 func writeSummary(summary evaluationSummary, outPath string) error {
