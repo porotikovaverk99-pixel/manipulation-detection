@@ -21,15 +21,16 @@ import (
 
 // App представляет основное приложение.
 type App struct {
-	config          *config.Config
-	logger          *zap.Logger
-	server          *server.Server
-	db              *repository.PostgresDB
-	pingHandler     *handler.PingHandler
-	analyzeHandler  *handler.AnalyzeHandler
-	analysisHandler *handler.AnalysisHandler
-	ingestHandler   *handler.IngestionHandler
-	casesHandler    *handler.CasesHandler
+	config           *config.Config
+	logger           *zap.Logger
+	server           *server.Server
+	db               *repository.PostgresDB
+	pingHandler      *handler.PingHandler
+	analyzeHandler   *handler.AnalyzeHandler
+	analysisHandler  *handler.AnalysisHandler
+	ingestHandler    *handler.IngestionHandler
+	casesHandler     *handler.CasesHandler
+	dashboardHandler *handler.DashboardHandler
 }
 
 // NewApp создаёт новое приложение.
@@ -59,20 +60,22 @@ func NewApp() (*App, error) {
 	analysisHandler := handler.NewAnalysisHandler(db)
 	ingestHandler := handler.NewIngestionHandler(db)
 	casesHandler := handler.NewCasesHandler(db)
+	dashboardHandler := handler.NewDashboardHandler(db)
 
 	// Создаем сервер
 	srv := server.New(cfg.RunAddr)
 
 	return &App{
-		config:          &cfg,
-		logger:          zapLogger,
-		server:          srv,
-		db:              db,
-		pingHandler:     pingHandler,
-		analyzeHandler:  analyzeHandler,
-		analysisHandler: analysisHandler,
-		ingestHandler:   ingestHandler,
-		casesHandler:    casesHandler,
+		config:           &cfg,
+		logger:           zapLogger,
+		server:           srv,
+		db:               db,
+		pingHandler:      pingHandler,
+		analyzeHandler:   analyzeHandler,
+		analysisHandler:  analysisHandler,
+		ingestHandler:    ingestHandler,
+		casesHandler:     casesHandler,
+		dashboardHandler: dashboardHandler,
 	}, nil
 }
 
@@ -84,6 +87,8 @@ func (a *App) setupRoutes() {
 	a.server.Get("/api/analysis/summary", a.corsMiddleware(a.analysisHandler.Summary()))
 	a.server.Get("/api/ingestion/runs", a.corsMiddleware(a.ingestHandler.ListRuns()))
 	a.server.Get("/api/cases", a.corsMiddleware(a.casesHandler.List()))
+	a.server.Get("/api/cases/summary", a.corsMiddleware(a.casesHandler.Summary()))
+	a.server.Get("/api/dashboard/metrics", a.corsMiddleware(a.dashboardHandler.Metrics()))
 	a.server.Get("/api/cases/{id}", a.corsMiddleware(a.casesHandler.Detail()))
 	a.server.Get("/api/cases/{id}/scores", a.corsMiddleware(a.casesHandler.Scores()))
 	a.server.Get("/api/model-comparison", a.corsMiddleware(a.casesHandler.ModelComparison()))
@@ -124,6 +129,8 @@ func (a *App) Run() error {
 		log.Printf("  GET  /api/analysis/summary")
 		log.Printf("  GET  /api/ingestion/runs")
 		log.Printf("  GET  /api/cases")
+		log.Printf("  GET  /api/cases/summary")
+		log.Printf("  GET  /api/dashboard/metrics")
 		log.Printf("  GET  /api/cases/{id}")
 		log.Printf("  GET  /api/cases/{id}/scores")
 		log.Printf("  GET  /api/model-comparison")

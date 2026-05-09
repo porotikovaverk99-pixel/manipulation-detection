@@ -8,6 +8,7 @@ import {
   CaseScoresResponse,
   CasesListQuery,
   CasesListResponse,
+  CasesSummaryResponse,
   ComponentScores,
   DecisionResponse,
   EvidenceGroup,
@@ -79,7 +80,19 @@ interface BackendCaseListItem {
 
 interface BackendCasesListResponse {
   count: number;
+  page?: number;
+  limit?: number;
   items: BackendCaseListItem[];
+}
+
+interface BackendCasesSummaryResponse {
+  total_cases: number;
+  high_risk: number;
+  medium_risk: number;
+  low_risk: number;
+  mean_risk: number;
+  limit: number;
+  pages: number;
 }
 
 interface BackendPostItem {
@@ -153,18 +166,33 @@ interface BackendModelComparison {
   generated_at: string;
 }
 
+export async function getCasesSummary(query: CasesListQuery = {}): Promise<CasesSummaryResponse> {
+  const params = toSearchParams({
+    ...query,
+    limit: query.limit ?? 20,
+  });
+  return requestJSON<BackendCasesSummaryResponse>(`/cases/summary?${params.toString()}`);
+}
+
 export async function getCases(query: CasesListQuery = {}): Promise<CasesListResponse> {
   const params = toSearchParams({
     ...query,
-    limit: query.limit ?? 100,
+    page: query.page ?? 1,
+    limit: query.limit ?? 20,
   });
   const payload = await requestJSON<BackendCasesListResponse>(`/cases?${params.toString()}`);
   const scorerKey = query.scorer_key || 'case_ensemble_v1';
 
+  const page = payload.page ?? query.page ?? 1;
+  const limit = payload.limit ?? query.limit ?? 20;
+  const items = payload.items.map((item) => mapCaseListItem(item, scorerKey));
+
   return {
     scorer_key: scorerKey,
     total: payload.count,
-    items: payload.items.map((item) => mapCaseListItem(item, scorerKey)),
+    page,
+    limit,
+    items,
   };
 }
 
@@ -504,4 +532,45 @@ function scorerLabel(key: string): string {
 
 function scorerDescription(key: string): string {
   return SCORERS.find((item) => item.key === key)?.description || 'Model score from backend.';
+}
+
+// Добавить в конец файла
+
+export interface DashboardMetrics {
+  cases_over_time: Array<{
+    date: string;
+    total: number;
+    high_risk: number;
+    medium_risk: number;
+    low_risk: number;
+  }>;
+  risk_distribution: {
+    high: number;
+    medium: number;
+    low: number;
+  };
+  top_events: Array<{
+    event_name: string;
+    case_count: number;
+    avg_risk: number;
+  }>;
+  scorer_performance: Array<{
+    scorer_key: string;
+    avg_risk_score: number;
+    cases_analyzed: number;
+  }>;
+  timeline_data: Array<{
+    date: string;
+    event_count: number;
+  }>;
+}
+
+export async function getDashboardMetrics(query: CasesListQuery = {}): Promise<DashboardMetrics> {
+  const params = toSearchParams({
+    source_name: 'pheme_large',
+    dataset_name: 'pheme',
+    dataset_split: 'eventcv_large',
+    ...query,
+  });
+  return requestJSON<DashboardMetrics>(`/dashboard/metrics?${params.toString()}`);
 }

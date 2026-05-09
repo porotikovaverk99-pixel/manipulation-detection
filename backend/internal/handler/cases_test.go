@@ -19,11 +19,14 @@ type fakeCaseRepository struct {
 	detailScorerKey    string
 	scoresCaseID       int64
 	comparisonFilter   repository.ModelComparisonFilter
+	summaryFilter      repository.CaseFilter
 	listCasesResult    []repository.CaseListItem
+	caseSummaryResult  repository.CasesSummary
 	caseDetailsResult  repository.CaseDetails
 	caseScoresResult   []repository.CaseModelScoreItem
 	comparisonResult   repository.ModelComparisonSummary
 	listCasesErr       error
+	caseSummaryErr     error
 	caseDetailsErr     error
 	caseScoresErr      error
 	modelComparisonErr error
@@ -32,6 +35,11 @@ type fakeCaseRepository struct {
 func (f *fakeCaseRepository) ListCases(filter repository.CaseFilter) ([]repository.CaseListItem, error) {
 	f.listFilter = filter
 	return f.listCasesResult, f.listCasesErr
+}
+
+func (f *fakeCaseRepository) GetCasesSummary(filter repository.CaseFilter) (repository.CasesSummary, error) {
+	f.summaryFilter = filter
+	return f.caseSummaryResult, f.caseSummaryErr
 }
 
 func (f *fakeCaseRepository) GetCaseDetails(caseID int64, scorerKey string) (repository.CaseDetails, error) {
@@ -68,7 +76,7 @@ func TestCasesHandlerListParsesFilters(t *testing.T) {
 
 	req := httptest.NewRequest(
 		http.MethodGet,
-		"/api/cases?source_name=pheme_large&dataset_name=pheme&dataset_split=eventcv_large&label=rumour&risk_level=high&scorer_key=case_ensemble_v1&only_unscored=true&limit=5",
+		"/api/cases?source_name=pheme_large&dataset_name=pheme&dataset_split=eventcv_large&label=rumour&risk_level=high&scorer_key=case_ensemble_v1&only_unscored=true&limit=5&page=3",
 		nil,
 	)
 	rr := httptest.NewRecorder()
@@ -87,6 +95,7 @@ func TestCasesHandlerListParsesFilters(t *testing.T) {
 		ScorerKey:    "case_ensemble_v1",
 		OnlyUnscored: true,
 		Limit:        5,
+		Offset:       10,
 	}
 	if !reflect.DeepEqual(fake.listFilter, wantFilter) {
 		t.Fatalf("unexpected filter:\nwant %#v\ngot  %#v", wantFilter, fake.listFilter)
@@ -94,12 +103,14 @@ func TestCasesHandlerListParsesFilters(t *testing.T) {
 
 	var payload struct {
 		Count int                       `json:"count"`
+		Page  int                       `json:"page"`
+		Limit int                       `json:"limit"`
 		Items []repository.CaseListItem `json:"items"`
 	}
 	if err := json.NewDecoder(rr.Body).Decode(&payload); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if payload.Count != 1 || len(payload.Items) != 1 || payload.Items[0].ID != 236 {
+	if payload.Count != 1 || payload.Page != 3 || payload.Limit != 5 || len(payload.Items) != 1 || payload.Items[0].ID != 236 {
 		t.Fatalf("unexpected list response: %#v", payload)
 	}
 }

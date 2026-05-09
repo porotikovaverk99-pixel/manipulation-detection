@@ -58,16 +58,30 @@ export interface CasesListQuery {
   dataset_name?: string;
   dataset_split?: string;
   event_name?: string;
-  status?: CaseStatus;
-  risk_level?: RiskLevel;
+  status?: CaseStatus | 'all';
+  risk_level?: RiskLevel | 'all';
   label?: string;
   limit?: number;
+  page?: number;
+  days?: number;
 }
 
 export interface CasesListResponse {
   scorer_key: string;
   total: number;
   items: CaseListItem[];
+  page: number;
+  limit: number;
+}
+
+export interface CasesSummaryResponse {
+  total_cases: number;
+  high_risk: number;
+  medium_risk: number;
+  low_risk: number;
+  mean_risk: number;
+  limit: number;
+  pages: number;
 }
 
 export interface PostItem {

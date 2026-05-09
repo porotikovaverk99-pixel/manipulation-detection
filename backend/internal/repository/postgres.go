@@ -149,12 +149,74 @@ type CaseFilter struct {
 	SourceName            string
 	DatasetName           string
 	DatasetSplit          string
+	EventName             string
+	Status                string
 	Label                 string
 	RiskLevel             string
 	ScorerKey             string
 	OnlyUnscored          bool
 	MissingModelScoreKeys []string
 	Limit                 int
+	Offset                int
+}
+
+// CasesSummary агрегирует case-level статистику для очереди и пагинации.
+type CasesSummary struct {
+	TotalCases int     `json:"total_cases"`
+	HighRisk   int     `json:"high_risk"`
+	MediumRisk int     `json:"medium_risk"`
+	LowRisk    int     `json:"low_risk"`
+	MeanRisk   float64 `json:"mean_risk"`
+}
+
+// DashboardFilter задает фильтры для аналитического дашборда.
+type DashboardFilter struct {
+	SourceName   string
+	DatasetName  string
+	DatasetSplit string
+	EventName    string
+	Label        string
+	Status       string
+	ScorerKey    string
+	Days         int
+}
+
+// DashboardMetrics содержит агрегаты для frontend dashboard.
+type DashboardMetrics struct {
+	CasesOverTime    []DashboardCasesOverTimePoint `json:"cases_over_time"`
+	RiskDistribution struct {
+		High   int `json:"high"`
+		Medium int `json:"medium"`
+		Low    int `json:"low"`
+	} `json:"risk_distribution"`
+	TopEvents         []DashboardTopEvent          `json:"top_events"`
+	ScorerPerformance []DashboardScorerPerformance `json:"scorer_performance"`
+	TimelineData      []DashboardTimelinePoint     `json:"timeline_data"`
+}
+
+type DashboardCasesOverTimePoint struct {
+	Date       string `json:"date"`
+	Total      int    `json:"total"`
+	HighRisk   int    `json:"high_risk"`
+	MediumRisk int    `json:"medium_risk"`
+	LowRisk    int    `json:"low_risk"`
+}
+
+type DashboardTopEvent struct {
+	EventName string  `json:"event_name"`
+	CaseCount int     `json:"case_count"`
+	AvgRisk   float64 `json:"avg_risk"`
+}
+
+type DashboardScorerPerformance struct {
+	ScorerKey     string  `json:"scorer_key"`
+	AvgRiskScore  float64 `json:"avg_risk_score"`
+	CasesAnalyzed int     `json:"cases_analyzed"`
+}
+
+type DashboardTimelinePoint struct {
+	Date       string `json:"date"`
+	EventCount int    `json:"event_count"`
 }
 
 // CasePostData представляет посты, входящие в case.
@@ -1094,6 +1156,14 @@ func (p *PostgresDB) ListCases(filter CaseFilter) ([]CaseListItem, error) {
 		args = append(args, filter.DatasetSplit)
 		conditions = append(conditions, fmt.Sprintf("c.dataset_split = $%d", len(args)))
 	}
+	if filter.EventName != "" {
+		args = append(args, filter.EventName)
+		conditions = append(conditions, fmt.Sprintf("c.event_name = $%d", len(args)))
+	}
+	if filter.Status != "" {
+		args = append(args, filter.Status)
+		conditions = append(conditions, fmt.Sprintf("c.status = $%d", len(args)))
+	}
 	if filter.Label != "" {
 		args = append(args, filter.Label)
 		conditions = append(conditions, fmt.Sprintf("c.label = $%d", len(args)))
@@ -1142,7 +1212,14 @@ func (p *PostgresDB) ListCases(filter CaseFilter) ([]CaseListItem, error) {
 		conditions = append(conditions, "1=1")
 	}
 
+	if filter.Offset < 0 {
+		filter.Offset = 0
+	}
+
 	args = append(args, filter.Limit)
+	limitArgIndex := len(args)
+	args = append(args, filter.Offset)
+	offsetArgIndex := len(args)
 	query := fmt.Sprintf(`
 		SELECT
 			c.id,
@@ -1165,8 +1242,8 @@ func (p *PostgresDB) ListCases(filter CaseFilter) ([]CaseListItem, error) {
 		WHERE %s
 		GROUP BY %s
 		ORDER BY %s, c.first_event_at DESC NULLS LAST, c.id DESC
-		LIMIT $%d
-	`, scoreSelect, scoreJoin, strings.Join(conditions, " AND "), scoreGroupBy, scoreOrder, len(args))
+		LIMIT $%d OFFSET $%d
+	`, scoreSelect, scoreJoin, strings.Join(conditions, " AND "), scoreGroupBy, scoreOrder, limitArgIndex, offsetArgIndex)
 
 	rows, err := p.db.Query(query, args...)
 	if err != nil {
@@ -1222,6 +1299,86 @@ func (p *PostgresDB) ListCases(filter CaseFilter) ([]CaseListItem, error) {
 	}
 
 	return items, rows.Err()
+}
+
+// GetCasesSummary возвращает агрегаты по cases для текущего набора фильтров.
+func (p *PostgresDB) GetCasesSummary(filter CaseFilter) (CasesSummary, error) {
+	conditions := make([]string, 0, 7)
+	args := make([]interface{}, 0, 7)
+	scorerKey := normalizeScorerKey(filter.ScorerKey)
+	useModelScore := useCaseModelScore(scorerKey)
+
+	if filter.SourceName != "" {
+		args = append(args, filter.SourceName)
+		conditions = append(conditions, fmt.Sprintf("c.source_name = $%d", len(args)))
+	}
+	if filter.DatasetName != "" {
+		args = append(args, filter.DatasetName)
+		conditions = append(conditions, fmt.Sprintf("c.dataset_name = $%d", len(args)))
+	}
+	if filter.DatasetSplit != "" {
+		args = append(args, filter.DatasetSplit)
+		conditions = append(conditions, fmt.Sprintf("c.dataset_split = $%d", len(args)))
+	}
+	if filter.EventName != "" {
+		args = append(args, filter.EventName)
+		conditions = append(conditions, fmt.Sprintf("c.event_name = $%d", len(args)))
+	}
+	if filter.Status != "" {
+		args = append(args, filter.Status)
+		conditions = append(conditions, fmt.Sprintf("c.status = $%d", len(args)))
+	}
+	if filter.Label != "" {
+		args = append(args, filter.Label)
+		conditions = append(conditions, fmt.Sprintf("c.label = $%d", len(args)))
+	}
+
+	scoreJoin := "LEFT JOIN case_scores cs ON cs.case_id = c.id"
+	riskExpr := "COALESCE(cs.risk_level, '')"
+	scoreExpr := "cs.risk_score"
+	groupBy := "c.id, cs.case_id"
+	if useModelScore {
+		args = append(args, scorerKey)
+		scoreJoin = fmt.Sprintf("LEFT JOIN case_model_scores cms ON cms.case_id = c.id AND cms.scorer_key = $%d", len(args))
+		riskExpr = "COALESCE(cms.risk_level, '')"
+		scoreExpr = "cms.risk_score"
+		groupBy = "c.id, cms.id"
+	}
+	if filter.RiskLevel != "" {
+		args = append(args, filter.RiskLevel)
+		conditions = append(conditions, fmt.Sprintf("%s = $%d", riskExpr, len(args)))
+	}
+	if len(conditions) == 0 {
+		conditions = append(conditions, "1=1")
+	}
+
+	query := fmt.Sprintf(`
+		SELECT
+			COUNT(*) AS total_cases,
+			COUNT(*) FILTER (WHERE risk_level = 'high') AS high_risk,
+			COUNT(*) FILTER (WHERE risk_level = 'medium') AS medium_risk,
+			COUNT(*) FILTER (WHERE risk_level = 'low') AS low_risk,
+			COALESCE(AVG(risk_score), 0) AS mean_risk
+		FROM (
+			SELECT c.id, %s AS risk_level, %s AS risk_score
+			FROM cases c
+			%s
+			WHERE %s
+			GROUP BY %s
+		) filtered_cases
+	`, riskExpr, scoreExpr, scoreJoin, strings.Join(conditions, " AND "), groupBy)
+
+	var summary CasesSummary
+	if err := p.db.QueryRow(query, args...).Scan(
+		&summary.TotalCases,
+		&summary.HighRisk,
+		&summary.MediumRisk,
+		&summary.LowRisk,
+		&summary.MeanRisk,
+	); err != nil {
+		return CasesSummary{}, fmt.Errorf("get cases summary: %w", err)
+	}
+	return summary, nil
 }
 
 // GetCaseDetails возвращает полный case-level payload для frontend details view.

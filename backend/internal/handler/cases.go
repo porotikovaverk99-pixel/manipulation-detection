@@ -13,6 +13,7 @@ import (
 
 type caseRepository interface {
 	ListCases(repository.CaseFilter) ([]repository.CaseListItem, error)
+	GetCasesSummary(repository.CaseFilter) (repository.CasesSummary, error)
 	GetCaseDetails(int64, string) (repository.CaseDetails, error)
 	ListCaseModelScores(int64) ([]repository.CaseModelScoreItem, error)
 	GetModelComparison(repository.ModelComparisonFilter) (repository.ModelComparisonSummary, error)
@@ -29,25 +30,15 @@ func NewCasesHandler(repo caseRepository) *CasesHandler {
 
 func (h *CasesHandler) List() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		filter := repository.CaseFilter{
-			SourceName:   r.URL.Query().Get("source_name"),
-			DatasetName:  r.URL.Query().Get("dataset_name"),
-			DatasetSplit: r.URL.Query().Get("dataset_split"),
-			Label:        r.URL.Query().Get("label"),
-			RiskLevel:    r.URL.Query().Get("risk_level"),
-			ScorerKey:    r.URL.Query().Get("scorer_key"),
-			OnlyUnscored: false,
-			Limit:        20,
+		page, limit, err := parsePagination(r)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
 		}
 
-		if raw := r.URL.Query().Get("limit"); raw != "" {
-			limit, err := strconv.Atoi(raw)
-			if err != nil || limit <= 0 || limit > 500 {
-				http.Error(w, "invalid limit", http.StatusBadRequest)
-				return
-			}
-			filter.Limit = limit
-		}
+		filter := caseFilterFromRequest(r)
+		filter.Limit = limit
+		filter.Offset = (page - 1) * limit
 		if raw := r.URL.Query().Get("only_unscored"); raw != "" {
 			switch raw {
 			case "1", "true", "yes":
@@ -71,6 +62,42 @@ func (h *CasesHandler) List() http.HandlerFunc {
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"items": items,
 			"count": len(items),
+			"page":  page,
+			"limit": limit,
+		})
+	}
+}
+
+func (h *CasesHandler) Summary() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		_, limit, err := parsePagination(r)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		filter := caseFilterFromRequest(r)
+		summary, err := h.repo.GetCasesSummary(filter)
+		if err != nil {
+			http.Error(w, "failed to fetch cases summary", http.StatusInternalServerError)
+			return
+		}
+
+		pages := 0
+		if summary.TotalCases > 0 {
+			pages = (summary.TotalCases + limit - 1) / limit
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"total_cases": summary.TotalCases,
+			"high_risk":   summary.HighRisk,
+			"medium_risk": summary.MediumRisk,
+			"low_risk":    summary.LowRisk,
+			"mean_risk":   summary.MeanRisk,
+			"limit":       limit,
+			"pages":       pages,
 		})
 	}
 }
@@ -158,6 +185,46 @@ func (h *CasesHandler) ModelComparison() http.HandlerFunc {
 func parseCaseID(r *http.Request) (int64, error) {
 	rawID := chi.URLParam(r, "id")
 	return strconv.ParseInt(rawID, 10, 64)
+}
+
+func caseFilterFromRequest(r *http.Request) repository.CaseFilter {
+	return repository.CaseFilter{
+		SourceName:   r.URL.Query().Get("source_name"),
+		DatasetName:  r.URL.Query().Get("dataset_name"),
+		DatasetSplit: r.URL.Query().Get("dataset_split"),
+		EventName:    r.URL.Query().Get("event_name"),
+		Status:       r.URL.Query().Get("status"),
+		Label:        r.URL.Query().Get("label"),
+		RiskLevel:    r.URL.Query().Get("risk_level"),
+		ScorerKey:    r.URL.Query().Get("scorer_key"),
+		OnlyUnscored: false,
+	}
+}
+
+func parsePagination(r *http.Request) (int, int, error) {
+	page := 1
+	limit := 20
+	if raw := r.URL.Query().Get("page"); raw != "" {
+		parsedPage, err := strconv.Atoi(raw)
+		if err != nil || parsedPage <= 0 {
+			return 0, 0, errInvalidQuery("invalid page")
+		}
+		page = parsedPage
+	}
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		parsedLimit, err := strconv.Atoi(raw)
+		if err != nil || parsedLimit <= 0 || parsedLimit > 500 {
+			return 0, 0, errInvalidQuery("invalid limit")
+		}
+		limit = parsedLimit
+	}
+	return page, limit, nil
+}
+
+type errInvalidQuery string
+
+func (e errInvalidQuery) Error() string {
+	return string(e)
 }
 
 func parseCSVQuery(raw string) []string {

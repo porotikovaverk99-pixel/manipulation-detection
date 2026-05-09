@@ -1,0 +1,1 @@
+export { RiskPill } from './RiskPill';
