@@ -4,6 +4,7 @@ package config
 import (
 	"flag"
 	"log"
+	"os"
 	"time"
 
 	"github.com/ilyakaznacheev/cleanenv"
@@ -40,6 +41,11 @@ func ParseFlags() Config {
 
 	if err := cleanenv.ReadEnv(&cfg); err != nil {
 		log.Printf("Warning: error reading environment variables: %v", err)
+	}
+
+	// Backward compatibility: часть компонентов использует DATABASE_URL.
+	if cfg.DatabaseDSN == "" {
+		cfg.DatabaseDSN = os.Getenv("DATABASE_URL")
 	}
 
 	flag.StringVar(&cfg.RunAddr, "a", cfg.RunAddr, "address and port to run server")

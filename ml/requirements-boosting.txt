@@ -1,0 +1,7 @@
+# LightGBM is the default boosting backend for this project.
+lightgbm>=4,<5
+
+# XGBoost is supported by ml/src/train_case_boosting_detector.py via
+# CASE_BOOSTING_MODEL_KIND=xgboost, but it can pull large CUDA/NCCL wheels on
+# some Linux environments. Install it manually only when needed:
+# xgboost>=2,<4

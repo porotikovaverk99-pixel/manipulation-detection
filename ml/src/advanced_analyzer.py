@@ -1,6 +1,6 @@
 import re
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Tuple, Optional
 from collections import Counter, defaultdict
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -8,6 +8,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.ensemble import RandomForestClassifier
 import hashlib
 import json
+import os
 import requests
 from dataclasses import dataclass
 import asyncio
@@ -42,6 +43,7 @@ class AdvancedManipulationAnalyzer:
         
         print(f"   - db_connection: {'есть' if db_connection else 'НЕТ'}")
         print(f"   - backend_url: {backend_url}")
+        self.enable_live_comment_fetch = os.getenv("ENABLE_LIVE_COMMENT_FETCH", "false").lower() == "true"
         
         # Загрузка ML модели (будет обучена на реальных данных)
         self.classifier = None
@@ -120,6 +122,10 @@ class AdvancedManipulationAnalyzer:
     async def get_post_comments(self, post_id: int) -> List[Dict]:
         """Получение комментариев к посту"""
         print(f"  💬 get_post_comments(post_id={post_id})")
+
+        if not self.enable_live_comment_fetch:
+            print("  ℹ️ Live comment fetch disabled")
+            return []
         
         try:
             async with aiohttp.ClientSession() as session:
@@ -318,7 +324,7 @@ class AdvancedManipulationAnalyzer:
             
             likes, reposts, replies, pub_time = post
             
-            age_hours = (datetime.now() - published_at).total_seconds() / 3600
+            age_hours = (datetime.now(timezone.utc) - self._normalize_datetime(published_at)).total_seconds() / 3600
             
             if age_hours < 1:
                 return {'suspicious_velocity': False, 'age_hours': age_hours}
@@ -465,10 +471,17 @@ class AdvancedManipulationAnalyzer:
                 'text_length': 0
             }
     
+    def _normalize_datetime(self, value: datetime) -> datetime:
+        if value is None:
+            return datetime.now(timezone.utc)
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
     def _analyze_account_factor(self, followers: int, created_at: datetime, behavior: Dict) -> Dict:
         try:
             if created_at:
-                account_age_days = (datetime.now() - created_at).days
+                account_age_days = (datetime.now(timezone.utc) - self._normalize_datetime(created_at)).days
             else:
                 account_age_days = 365
             

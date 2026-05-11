@@ -20,7 +20,10 @@ func main() {
 
 	connStr := os.Getenv("DATABASE_URL")
 	if connStr == "" {
-		connStr = "postgres://postgres:123@localhost:5432/manipulation_detection?sslmode=disable"
+		connStr = os.Getenv("DATABASE_URI")
+	}
+	if connStr == "" {
+		connStr = "postgres://postgres:password@localhost:5432/manipulation_detection?sslmode=disable"
 	}
 
 	db, err := repository.NewPostgresDB(connStr)
@@ -29,7 +32,7 @@ func main() {
 	}
 	defer db.Close()
 
-	mastodonToken := "6Voyg4Ri4oPalC2YbZQWJH2wp86py0S0Ge_N7JtMYXA"
+	mastodonToken := os.Getenv("MASTODON_TOKEN")
 	mastodonBaseURL := os.Getenv("MASTODON_BASE_URL")
 	if mastodonBaseURL == "" {
 		mastodonBaseURL = "https://mastodon.social"
@@ -39,6 +42,10 @@ func main() {
 	mlURL := os.Getenv("ML_URL")
 	if mlURL == "" {
 		mlURL = "http://localhost:8000"
+	}
+
+	if mastodonToken == "" {
+		log.Println("MASTODON_TOKEN не задан. Live-сбор может быть ограничен или недоступен.")
 	}
 
 	cfg := &collector.Config{

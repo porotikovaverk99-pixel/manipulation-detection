@@ -79,6 +79,18 @@ build/
 *.sqlite3
 *.dump
 *.pgdump
+!/backend/db_snapshots/
+!/backend/db_snapshots/*.pgdump
+
+# --- Датасеты и replay артефакты ---
+/data/raw/
+/data/processed/
+/data/cache/
+/data/exports/
+/backend/data/raw/
+/backend/data/processed/
+/backend/data/cache/
+/backend/data/exports/
 
 # --- Docker ---
 *.pid

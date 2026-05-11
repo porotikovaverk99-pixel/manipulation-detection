@@ -14,25 +14,30 @@ import (
 	"github.com/porotikovaverk99-pixel/manipulation-detection/backend/internal/config"
 	"github.com/porotikovaverk99-pixel/manipulation-detection/backend/internal/handler"
 	"github.com/porotikovaverk99-pixel/manipulation-detection/backend/internal/logger"
+	"github.com/porotikovaverk99-pixel/manipulation-detection/backend/internal/repository"
 	"github.com/porotikovaverk99-pixel/manipulation-detection/backend/internal/server"
 	"go.uber.org/zap"
 )
 
 // App представляет основное приложение.
 type App struct {
-	config         *config.Config
-	logger         *zap.Logger
-	server         *server.Server
-	pingHandler    *handler.PingHandler
-	analyzeHandler *handler.AnalyzeHandler
+	config           *config.Config
+	logger           *zap.Logger
+	server           *server.Server
+	db               *repository.PostgresDB
+	pingHandler      *handler.PingHandler
+	analyzeHandler   *handler.AnalyzeHandler
+	analysisHandler  *handler.AnalysisHandler
+	ingestHandler    *handler.IngestionHandler
+	casesHandler     *handler.CasesHandler
+	dashboardHandler *handler.DashboardHandler
+	accountsHandler  *handler.AccountsHandler
 }
 
 // NewApp создаёт новое приложение.
 func NewApp() (*App, error) {
 
 	cfg := config.ParseFlags()
-
-	fmt.Fprintf(os.Stderr, "DEBUG: DSN from config = %q\n", cfg.DatabaseDSN)
 
 	if err := logger.Initialize(cfg.LogLevel); err != nil {
 		return nil, fmt.Errorf("initialize logger: %w", err)
@@ -46,45 +51,76 @@ func NewApp() (*App, error) {
 	}
 
 	// Инициализируем хендлеры
+	db, err := repository.NewPostgresDB(cfg.DatabaseDSN)
+	if err != nil {
+		return nil, fmt.Errorf("connect database: %w", err)
+	}
+
 	pingHandler := handler.NewPingHandler()
 	analyzeHandler := handler.NewAnalyzeHandler(mlURL)
+	analysisHandler := handler.NewAnalysisHandler(db)
+	ingestHandler := handler.NewIngestionHandler(db)
+	casesHandler := handler.NewCasesHandler(db)
+	dashboardHandler := handler.NewDashboardHandler(db)
+	accountsHandler := handler.NewAccountsHandler(db)
 
 	// Создаем сервер
 	srv := server.New(cfg.RunAddr)
 
 	return &App{
-		config:         &cfg,
-		logger:         zapLogger,
-		server:         srv,
-		pingHandler:    pingHandler,
-		analyzeHandler: analyzeHandler,
+		config:           &cfg,
+		logger:           zapLogger,
+		server:           srv,
+		db:               db,
+		pingHandler:      pingHandler,
+		analyzeHandler:   analyzeHandler,
+		analysisHandler:  analysisHandler,
+		ingestHandler:    ingestHandler,
+		casesHandler:     casesHandler,
+		dashboardHandler: dashboardHandler,
+		accountsHandler:  accountsHandler,
 	}, nil
 }
 
-// setupRoutes настраивает маршруты.
 func (a *App) setupRoutes() {
-	// Регистрируем маршруты
+	// 🎯 Сначала — глобальные мидлвары (ДО регистрации маршрутов!)
+	a.server.Use(a.corsMiddlewareGlobal)
+
+	// Потом — маршруты (без обёрток corsMiddleware!)
 	a.server.Handle("/ping", a.pingHandler.Ping())
 	a.server.Handle("/api/analyze", a.analyzeHandler.Analyze())
-
-	// Добавляем CORS для фронтенда
-	a.server.Handle("/api/", a.corsMiddleware(a.analyzeHandler.Analyze()))
+	a.server.Get("/api/analysis/summary", a.analysisHandler.Summary())
+	a.server.Get("/api/ingestion/runs", a.ingestHandler.ListRuns())
+	a.server.Get("/api/cases", a.casesHandler.List())
+	a.server.Get("/api/cases/summary", a.casesHandler.Summary())
+	a.server.Get("/api/cases/{id}", a.casesHandler.Detail())
+	a.server.Get("/api/cases/{id}/scores", a.casesHandler.Scores())
+	a.server.Post("/api/cases/{id}/decision", a.casesHandler.Decision()) // ← больше не нужен corsMiddleware!
+	a.server.Get("/api/model-comparison", a.casesHandler.ModelComparison())
+	a.server.Get("/api/accounts", a.accountsHandler.List())
+	a.server.Handle("/api/dashboard/metrics", a.dashboardHandler.Metrics())
+	a.server.Handle("/api/dashboard/summary", a.dashboardHandler.Summary())
+	a.server.Handle("/api/dashboard/radar/", a.dashboardHandler.RadarData())
+	a.server.Handle("/api/dashboard/evidence", a.dashboardHandler.RecentEvidence())
+	a.server.Handle("/api/dashboard/branch-series", a.dashboardHandler.BranchTimeSeries())
 }
 
-// corsMiddleware добавляет CORS заголовки.
-func (a *App) corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+// corsMiddlewareGlobal применяет CORS ко всем запросам ДО маршрутизации
+func (a *App) corsMiddlewareGlobal(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, PATCH")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
+		w.Header().Set("Access-Control-Max-Age", "86400") // 24 часа кэширования preflight
 
-		if r.Method == "OPTIONS" {
+		// Обрабатываем preflight-запрос
+		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
 
-		next(w, r)
-	}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // Run запускает приложение.
@@ -100,6 +136,14 @@ func (a *App) Run() error {
 		log.Printf("Доступные эндпоинты:")
 		log.Printf("  GET  /ping")
 		log.Printf("  POST /api/analyze")
+		log.Printf("  GET  /api/analysis/summary")
+		log.Printf("  GET  /api/ingestion/runs")
+		log.Printf("  GET  /api/cases")
+		log.Printf("  GET  /api/cases/summary")
+		log.Printf("  GET  /api/dashboard/metrics")
+		log.Printf("  GET  /api/cases/{id}")
+		log.Printf("  GET  /api/cases/{id}/scores")
+		log.Printf("  GET  /api/model-comparison")
 
 		if err := a.server.Run(); err != nil && err != http.ErrServerClosed {
 			serverErr <- err
@@ -138,5 +182,8 @@ func (a *App) shutdown() error {
 
 // Close освобождает ресурсы приложения (логгер).
 func (a *App) Close() {
+	if a.db != nil {
+		_ = a.db.Close()
+	}
 	_ = a.logger.Sync()
 }

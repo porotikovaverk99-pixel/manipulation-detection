@@ -1,5 +1,5 @@
 import psycopg2
-from psycopg2.extras import RealDictCursor
+from psycopg2.extras import Json, RealDictCursor
 from datetime import datetime
 from typing import List, Dict, Optional
 
@@ -144,43 +144,20 @@ class DatabaseConnector:
                     analysis_id = result[0] if result else None
                     print(f"✅ Создан новый результат для поста {post_id}")
                 
-                # Сохраняем тактики, если есть analysis_id
-                if analysis_id and analysis_result.get('tactics'):
-                    # Удаляем старые тактики
-                    cur.execute("DELETE FROM detected_tactics WHERE analysis_result_id = %s", (analysis_id,))
-                    
-                    # Вставляем новые тактики
-                    for tactic in analysis_result['tactics']:
-                        clean_tactic = tactic.replace('🎯 ', '').replace('🔴 ', '').replace('🟠 ', '').replace('🟡 ', '').replace('🟢 ', '').strip()
-                        cur.execute("""
-                            INSERT INTO detected_tactics (analysis_result_id, tactic_name, confidence)
-                            VALUES (%s, %s, %s)
-                        """, (analysis_id, clean_tactic, 0.8))
-                    print(f"  📝 Сохранено {len(analysis_result['tactics'])} тактик")
-                
-                # Сохраняем evidence_cards
+                # Сохраняем evidence_cards в схему из backend/migrations.
                 if analysis_id and analysis_result.get('key_evidence'):
-                    # Проверяем, существует ли уже карточка
-                    cur.execute("SELECT id FROM evidence_cards WHERE analysis_result_id = %s", (analysis_id,))
-                    card_exists = cur.fetchone()
-                    
-                    key_evidence_json = json.dumps(analysis_result['key_evidence'], ensure_ascii=False)
-                    
-                    if card_exists:
-                        cur.execute("""
-                            UPDATE evidence_cards 
-                            SET key_evidence = %s::jsonb,
-                                summary = %s,
-                                updated_at = NOW()
-                            WHERE analysis_result_id = %s
-                        """, (key_evidence_json, analysis_result.get('recommendation', ''), analysis_id))
-                        print(f"  🔄 Обновлена карточка доказательств")
-                    else:
-                        cur.execute("""
-                            INSERT INTO evidence_cards (analysis_result_id, key_evidence, summary, created_at)
-                            VALUES (%s, %s::jsonb, %s, NOW())
-                        """, (analysis_id, key_evidence_json, analysis_result.get('recommendation', '')))
-                        print(f"  ✅ Создана карточка доказательств")
+                    cur.execute("""
+                        INSERT INTO evidence_cards (analysis_result_id, key_evidence, summary, created_at)
+                        VALUES (%s, %s, %s, NOW())
+                        ON CONFLICT (analysis_result_id) DO UPDATE SET
+                            key_evidence = EXCLUDED.key_evidence,
+                            summary = EXCLUDED.summary
+                    """, (
+                        analysis_id,
+                        Json(analysis_result['key_evidence']),
+                        analysis_result.get('recommendation', '')
+                    ))
+                    print("  ✅ Карточка доказательств сохранена")
                 
                 # Фиксируем транзакцию
                 self.connection.commit()
