@@ -8,15 +8,22 @@ import (
 	"github.com/porotikovaverk99-pixel/manipulation-detection/backend/internal/repository"
 )
 
-// AnalysisHandler отдает агрегаты по результатам batch/live анализа.
-type AnalysisHandler struct {
-	repo *repository.PostgresDB
+// analysisRepository defines interface for analysis data access
+type analysisRepository interface {
+	GetAnalysisSummary(repository.AnalysisPostFilter) (repository.AnalysisSummary, error)
 }
 
-func NewAnalysisHandler(repo *repository.PostgresDB) *AnalysisHandler {
+// AnalysisHandler отдает агрегаты по результатам batch/live анализа.
+type AnalysisHandler struct {
+	repo analysisRepository
+}
+
+// NewAnalysisHandler creates a new AnalysisHandler
+func NewAnalysisHandler(repo analysisRepository) *AnalysisHandler {
 	return &AnalysisHandler{repo: repo}
 }
 
+// Summary returns analysis summary for the given filters
 func (h *AnalysisHandler) Summary() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		filter := repository.AnalysisPostFilter{
@@ -41,7 +48,8 @@ func (h *AnalysisHandler) Summary() http.HandlerFunc {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(summary)
+		json.NewEncoder(w).Encode(summary)
 	}
 }

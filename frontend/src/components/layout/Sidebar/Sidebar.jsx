@@ -4,8 +4,9 @@ import styles from './Sidebar.module.css';
 
 const NAV_ITEMS = [
   { to: '/cases', label: 'Cases queue', icon: 'queue' },
-  { to: '/evaluation', label: 'Model comparison', icon: 'chart' },
   { to: '/dashboard', label: 'Dashboard', icon: 'dashboard' },
+  { to: '/accounts', label: 'Accounts', icon: 'users' },
+  { to: '/evaluation', label: 'Model comparison', icon: 'chart' },
 ];
 
 export function Sidebar() {
@@ -37,11 +38,6 @@ export function Sidebar() {
 
       <div className="nav-section">
         <div className="nav-label">Next stage</div>
-        <div className="nav-item disabled">
-          <Icon name="users" />
-          <span>Accounts</span>
-          <span className="nav-count">soon</span>
-        </div>
         <div className="nav-item disabled">
           <Icon name="live" />
           <span>Live ingest</span>

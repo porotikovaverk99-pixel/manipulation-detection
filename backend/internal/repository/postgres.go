@@ -177,12 +177,15 @@ type DashboardFilter struct {
 	EventName    string
 	Label        string
 	Status       string
+	RiskLevel    string
 	ScorerKey    string
 	Days         int
 }
 
 // DashboardMetrics содержит агрегаты для frontend dashboard.
 type DashboardMetrics struct {
+	Summary          DashboardSummary              `json:"summary"`
+	Engagement       DashboardEngagement           `json:"engagement"`
 	CasesOverTime    []DashboardCasesOverTimePoint `json:"cases_over_time"`
 	RiskDistribution struct {
 		High   int `json:"high"`
@@ -192,6 +195,36 @@ type DashboardMetrics struct {
 	TopEvents         []DashboardTopEvent          `json:"top_events"`
 	ScorerPerformance []DashboardScorerPerformance `json:"scorer_performance"`
 	TimelineData      []DashboardTimelinePoint     `json:"timeline_data"`
+	StatusBreakdown   []DashboardBreakdownItem     `json:"status_breakdown"`
+	LabelBreakdown    []DashboardBreakdownItem     `json:"label_breakdown"`
+	SourceBreakdown   []DashboardBreakdownItem     `json:"source_breakdown"`
+	DatasetBreakdown  []DashboardBreakdownItem     `json:"dataset_breakdown"`
+	TopRiskCases      []DashboardTopRiskCase       `json:"top_risk_cases"`
+}
+
+// DashboardSummary хранит ключевые агрегаты по выбранному срезу cases.
+type DashboardSummary struct {
+	TotalCases      int     `json:"total_cases"`
+	MeanRisk        float64 `json:"mean_risk"`
+	HighRiskShare   float64 `json:"high_risk_share"`
+	TotalPosts      int     `json:"total_posts"`
+	AvgPostsPerCase float64 `json:"avg_posts_per_case"`
+	OpenCases       int     `json:"open_cases"`
+	ClosedCases     int     `json:"closed_cases"`
+	FinalizedCases  int     `json:"finalized_cases"`
+	RumourCases     int     `json:"rumour_cases"`
+	NonRumourCases  int     `json:"non_rumour_cases"`
+}
+
+// DashboardEngagement хранит агрегаты по постам и аккаунтам внутри выбранного среза.
+type DashboardEngagement struct {
+	PostCount        int `json:"post_count"`
+	TotalLikes       int `json:"total_likes"`
+	TotalReposts     int `json:"total_reposts"`
+	TotalReplies     int `json:"total_replies"`
+	TotalEngagement  int `json:"total_engagement"`
+	UniqueAccounts   int `json:"unique_accounts"`
+	VerifiedAccounts int `json:"verified_accounts"`
 }
 
 type DashboardCasesOverTimePoint struct {
@@ -206,6 +239,26 @@ type DashboardTopEvent struct {
 	EventName string  `json:"event_name"`
 	CaseCount int     `json:"case_count"`
 	AvgRisk   float64 `json:"avg_risk"`
+}
+
+// DashboardBreakdownItem хранит универсальную разбивку по измерению.
+type DashboardBreakdownItem struct {
+	Name      string  `json:"name"`
+	CaseCount int     `json:"case_count"`
+	AvgRisk   float64 `json:"avg_risk"`
+}
+
+// DashboardTopRiskCase хранит самые рискованные cases для action-oriented dashboard.
+type DashboardTopRiskCase struct {
+	ID             int64   `json:"id"`
+	ExternalCaseID string  `json:"external_case_id"`
+	Title          string  `json:"title"`
+	EventName      string  `json:"event_name"`
+	Status         string  `json:"status"`
+	Label          string  `json:"label"`
+	PostCount      int     `json:"post_count"`
+	RiskScore      float64 `json:"risk_score"`
+	RiskLevel      string  `json:"risk_level"`
 }
 
 type DashboardScorerPerformance struct {
@@ -506,6 +559,58 @@ type ScoredCaseItem struct {
 	CoordinationScore float64    `json:"coordination_score"`
 	ContentScore      float64    `json:"content_score"`
 	Evidence          []string   `json:"evidence,omitempty"`
+}
+
+// AccountListItem aggregates account-level statistics for the Accounts page.
+type AccountListItem struct {
+	ID                int64      `json:"id"`
+	ExternalID        string     `json:"external_id"`
+	Username          string     `json:"username"`
+	DisplayName       string     `json:"display_name,omitempty"`
+	AccountURL        string     `json:"account_url,omitempty"`
+	FollowersCount    int        `json:"followers_count"`
+	FollowingCount    int        `json:"following_count"`
+	PostsCount        int        `json:"posts_count"`
+	IsBot             bool       `json:"is_bot"`
+	IsVerified        bool       `json:"is_verified"`
+	DatasetPostCount  int        `json:"dataset_post_count"`
+	CaseCount         int        `json:"case_count"`
+	RootPostCount     int        `json:"root_post_count"`
+	TotalEngagement   int        `json:"total_engagement"`
+	AvgManipulation   float64    `json:"avg_manipulation"`
+	MaxManipulation   float64    `json:"max_manipulation"`
+	AvgRiskScore      float64    `json:"avg_risk_score"`
+	HighRiskCaseCount int        `json:"high_risk_case_count"`
+	FirstSeenAt       *time.Time `json:"first_seen_at,omitempty"`
+	LastSeenAt        *time.Time `json:"last_seen_at,omitempty"`
+}
+
+// AccountsListResponse is the paginated Accounts API response.
+type AccountsListResponse struct {
+	Items []AccountListItem `json:"items"`
+	Total int               `json:"total"`
+	Page  int               `json:"page"`
+	Limit int               `json:"limit"`
+}
+
+// AccountFilter defines filters for the Accounts page.
+type AccountFilter struct {
+	DatasetName  string
+	DatasetSplit string
+	Search       string
+	OnlyVerified bool
+	OnlyBots     bool
+	Sort         string
+	Limit        int
+	Offset       int
+}
+
+// DecisionRecord stores a lightweight analyst decision for a case.
+type DecisionRecord struct {
+	CaseID     int64     `json:"case_id"`
+	Decision   string    `json:"decision"`
+	RecordedAt time.Time `json:"recorded_at"`
+	AuditID    string    `json:"audit_id"`
 }
 
 // EvaluationRunRecord хранит агрегированные метрики case-level evaluation.
@@ -3260,4 +3365,204 @@ func (p *PostgresDB) GetPostWithAccount(postID int64) (*PostFullData, error) {
 		return nil, err
 	}
 	return &data, nil
+}
+
+// Query выполняет SQL запрос и возвращает строки
+func (p *PostgresDB) Query(query string, args ...interface{}) (*sql.Rows, error) {
+	return p.db.Query(query, args...)
+}
+
+// QueryRow выполняет SQL запрос и возвращает одну строку
+func (p *PostgresDB) QueryRow(query string, args ...interface{}) *sql.Row {
+	return p.db.QueryRow(query, args...)
+}
+
+// Exec выполняет SQL запрос без возврата строк
+func (p *PostgresDB) Exec(query string, args ...interface{}) (sql.Result, error) {
+	return p.db.Exec(query, args...)
+}
+
+// Ping проверяет соединение с БД
+func (p *PostgresDB) Ping() error {
+	return p.db.Ping()
+}
+
+// ListAccounts returns account-level aggregates for the Accounts page.
+func (p *PostgresDB) ListAccounts(filter AccountFilter) (AccountsListResponse, error) {
+	if filter.Limit <= 0 {
+		filter.Limit = 50
+	}
+	if filter.Limit > 200 {
+		filter.Limit = 200
+	}
+	if filter.Offset < 0 {
+		filter.Offset = 0
+	}
+
+	conditions := make([]string, 0, 4)
+	args := make([]interface{}, 0, 6)
+	if strings.TrimSpace(filter.DatasetName) != "" && filter.DatasetName != "all" {
+		args = append(args, filter.DatasetName)
+		conditions = append(conditions, fmt.Sprintf("p.dataset_name = $%d", len(args)))
+	}
+	if strings.TrimSpace(filter.DatasetSplit) != "" && filter.DatasetSplit != "all" {
+		args = append(args, filter.DatasetSplit)
+		conditions = append(conditions, fmt.Sprintf("p.dataset_split = $%d", len(args)))
+	}
+	if strings.TrimSpace(filter.Search) != "" {
+		args = append(args, "%"+strings.ToLower(strings.TrimSpace(filter.Search))+"%")
+		conditions = append(conditions, fmt.Sprintf("(LOWER(a.username) LIKE $%d OR LOWER(COALESCE(a.display_name, '')) LIKE $%d OR LOWER(COALESCE(a.external_id, '')) LIKE $%d)", len(args), len(args), len(args)))
+	}
+	if filter.OnlyVerified {
+		conditions = append(conditions, "COALESCE(a.is_verified, FALSE)")
+	}
+	if filter.OnlyBots {
+		conditions = append(conditions, "COALESCE(a.is_bot, FALSE)")
+	}
+	whereSQL := "1=1"
+	if len(conditions) > 0 {
+		whereSQL = strings.Join(conditions, " AND ")
+	}
+
+	orderSQL := "total_engagement DESC, dataset_post_count DESC"
+	switch filter.Sort {
+	case "posts":
+		orderSQL = "dataset_post_count DESC, total_engagement DESC"
+	case "followers":
+		orderSQL = "followers_count DESC, dataset_post_count DESC"
+	case "risk":
+		orderSQL = "avg_risk_score DESC NULLS LAST, max_manipulation DESC NULLS LAST"
+	case "manipulation":
+		orderSQL = "max_manipulation DESC NULLS LAST, avg_manipulation DESC NULLS LAST"
+	}
+
+	countQuery := fmt.Sprintf(`
+		SELECT COUNT(DISTINCT a.id)
+		FROM accounts a
+		JOIN posts p ON p.account_id = a.id
+		WHERE %s
+	`, whereSQL)
+	var total int
+	if err := p.db.QueryRow(countQuery, args...).Scan(&total); err != nil {
+		return AccountsListResponse{}, fmt.Errorf("count accounts: %w", err)
+	}
+
+	queryArgs := append([]interface{}{}, args...)
+	queryArgs = append(queryArgs, filter.Limit)
+	limitIndex := len(queryArgs)
+	queryArgs = append(queryArgs, filter.Offset)
+	offsetIndex := len(queryArgs)
+	query := fmt.Sprintf(`
+		WITH account_rows AS (
+			SELECT
+				a.id,
+				COALESCE(a.external_id, '') AS external_id,
+				COALESCE(a.username, '') AS username,
+				COALESCE(a.display_name, '') AS display_name,
+				COALESCE(a.account_url, '') AS account_url,
+				COALESCE(a.followers_count, 0) AS followers_count,
+				COALESCE(a.following_count, 0) AS following_count,
+				COALESCE(a.posts_count, 0) AS posts_count,
+				COALESCE(a.is_bot, FALSE) AS is_bot,
+				COALESCE(a.is_verified, FALSE) AS is_verified,
+				COUNT(p.id) AS dataset_post_count,
+				COUNT(DISTINCT p.case_id) AS case_count,
+				COUNT(p.id) FILTER (WHERE p.is_case_root) AS root_post_count,
+				COALESCE(SUM(p.likes_count + p.reposts_count + p.replies_count), 0) AS total_engagement,
+				COALESCE(AVG(ar.manipulation_score), 0) AS avg_manipulation,
+				COALESCE(MAX(ar.manipulation_score), 0) AS max_manipulation,
+				COALESCE(AVG(cs.risk_score), 0) AS avg_risk_score,
+				COUNT(DISTINCT p.case_id) FILTER (WHERE cs.risk_level = 'high') AS high_risk_case_count,
+				MIN(p.published_at) AS first_seen_at,
+				MAX(p.published_at) AS last_seen_at
+			FROM accounts a
+			JOIN posts p ON p.account_id = a.id
+			LEFT JOIN analysis_results ar ON ar.post_id = p.id
+			LEFT JOIN case_scores cs ON cs.case_id = p.case_id
+			WHERE %s
+			GROUP BY a.id
+		)
+		SELECT * FROM account_rows
+		ORDER BY %s
+		LIMIT $%d OFFSET $%d
+	`, whereSQL, orderSQL, limitIndex, offsetIndex)
+	rows, err := p.db.Query(query, queryArgs...)
+	if err != nil {
+		return AccountsListResponse{}, fmt.Errorf("list accounts: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]AccountListItem, 0, filter.Limit)
+	for rows.Next() {
+		var item AccountListItem
+		var firstSeen, lastSeen sql.NullTime
+		if err := rows.Scan(
+			&item.ID,
+			&item.ExternalID,
+			&item.Username,
+			&item.DisplayName,
+			&item.AccountURL,
+			&item.FollowersCount,
+			&item.FollowingCount,
+			&item.PostsCount,
+			&item.IsBot,
+			&item.IsVerified,
+			&item.DatasetPostCount,
+			&item.CaseCount,
+			&item.RootPostCount,
+			&item.TotalEngagement,
+			&item.AvgManipulation,
+			&item.MaxManipulation,
+			&item.AvgRiskScore,
+			&item.HighRiskCaseCount,
+			&firstSeen,
+			&lastSeen,
+		); err != nil {
+			return AccountsListResponse{}, fmt.Errorf("scan account: %w", err)
+		}
+		if firstSeen.Valid {
+			item.FirstSeenAt = &firstSeen.Time
+		}
+		if lastSeen.Valid {
+			item.LastSeenAt = &lastSeen.Time
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return AccountsListResponse{}, err
+	}
+	return AccountsListResponse{Items: items, Total: total, Page: filter.Offset/filter.Limit + 1, Limit: filter.Limit}, nil
+}
+
+// RecordCaseDecision records an analyst decision.
+func (p *PostgresDB) RecordCaseDecision(caseID int64, decision string) (DecisionRecord, error) {
+	if caseID <= 0 {
+		return DecisionRecord{}, fmt.Errorf("invalid case id")
+	}
+	decision = strings.TrimSpace(decision)
+	if decision == "" {
+		decision = "unclear"
+	}
+
+	_, err := p.db.Exec(`
+		UPDATE cases 
+		SET status = $2, updated_at = NOW()
+		WHERE id = $1
+	`, caseID, decision)
+	if err != nil {
+		return DecisionRecord{}, fmt.Errorf("update case status: %w", err)
+	}
+
+	return DecisionRecord{
+		CaseID:     caseID,
+		Decision:   decision,
+		RecordedAt: time.Now().UTC(),
+	}, nil
+}
+
+func nullInt64Ptr(value sql.NullInt64) interface{} {
+	if value.Valid {
+		return value.Int64
+	}
+	return nil
 }

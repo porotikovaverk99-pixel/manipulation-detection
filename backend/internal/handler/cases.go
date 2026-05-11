@@ -17,6 +17,7 @@ type caseRepository interface {
 	GetCaseDetails(int64, string) (repository.CaseDetails, error)
 	ListCaseModelScores(int64) ([]repository.CaseModelScoreItem, error)
 	GetModelComparison(repository.ModelComparisonFilter) (repository.ModelComparisonSummary, error)
+	RecordCaseDecision(int64, string) (repository.DecisionRecord, error)
 }
 
 // CasesHandler отдает case-level сущности и их score summary.
@@ -147,6 +148,35 @@ func (h *CasesHandler) Scores() http.HandlerFunc {
 			"items":   items,
 			"count":   len(items),
 		})
+	}
+}
+
+func (h *CasesHandler) Decision() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := parseCaseID(r)
+		if err != nil {
+			http.Error(w, "invalid case id", http.StatusBadRequest)
+			return
+		}
+		var payload struct {
+			Decision string `json:"decision"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, "invalid decision payload", http.StatusBadRequest)
+			return
+		}
+		if strings.TrimSpace(payload.Decision) == "" {
+			http.Error(w, "decision is required", http.StatusBadRequest)
+			return
+		}
+		record, err := h.repo.RecordCaseDecision(id, payload.Decision)
+		if err != nil {
+			http.Error(w, "failed to record decision", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(record)
 	}
 }
 

@@ -105,6 +105,11 @@ interface BackendPostItem {
   is_case_root: boolean;
   reply_to_post_id?: number;
   replies_count?: number;
+  likes_count?: number;
+  reposts_count?: number;
+  followers_count?: number;
+  following_count?: number;
+  is_verified?: boolean;
   tags?: string[];
   links?: string[];
 }
@@ -113,10 +118,14 @@ interface BackendAccountItem {
   id: number;
   external_id: string;
   username: string;
+  display_name?: string;
   case_post_count: number;
+  followers_count?: number;
+  following_count?: number;
   first_post_at?: string;
   is_bot: boolean;
   is_verified: boolean;
+  has_root_post?: boolean;
 }
 
 interface BackendArtifactCount {
@@ -243,15 +252,6 @@ export async function recordDecision(id: number, decision: AnalystDecision): Pro
     body: JSON.stringify({ decision }),
   });
 
-  if (response.status === 404 || response.status === 405) {
-    return {
-      case_id: id,
-      decision,
-      recorded_at: new Date().toISOString(),
-      audit_id: 'local-preview',
-    };
-  }
-
   if (!response.ok) {
     throw new Error(`Decision request failed with HTTP ${response.status}`);
   }
@@ -333,11 +333,15 @@ function mapCaseDetails(payload: BackendCaseDetailsResponse, scorerKey: string):
       id: account.id,
       external_id: account.external_id,
       handle: account.username,
+      display_name: account.display_name || '',
       joined_month: account.first_post_at ? account.first_post_at.slice(0, 7) : 'unknown',
       posts: account.case_post_count,
+      followers_count: account.followers_count || 0,
+      following_count: account.following_count || 0,
       share: account.case_post_count / postCount,
       bot_score: account.is_bot ? 0.7 : null,
       is_verified: account.is_verified,
+      has_root_post: Boolean(account.has_root_post),
     })),
     artifacts: mapArtifacts(payload.artifacts || {}),
     features,
@@ -350,6 +354,7 @@ function mapPost(post: BackendPostItem, startMs: number | null): import('../type
   return {
     id: String(post.id),
     external_id: post.external_id,
+    account_id: post.account_id,
     author_handle: post.username,
     t_offset_sec: offset,
     kind: post.is_case_root ? 'root' : post.reply_to_post_id ? 'reply' : 'repost',
@@ -358,6 +363,11 @@ function mapPost(post: BackendPostItem, startMs: number | null): import('../type
     published_at: post.published_at,
     tags: post.tags || [],
     links: post.links || [],
+    likes_count: post.likes_count || 0,
+    reposts_count: post.reposts_count || 0,
+    followers_count: post.followers_count || 0,
+    following_count: post.following_count || 0,
+    is_verified: Boolean(post.is_verified),
   };
 }
 
@@ -483,13 +493,11 @@ function computeDurationMin(first: string | null, last: string | null): number |
 }
 
 function normalizeStatus(status: string): CaseListItem['status'] {
-  if (status === 'open' || status === 'closed' || status === 'finalized') {
+  if (status === 'open' || status === 'suspicious' || status === 'not_suspicious' || status === 'unclear') {
     return status;
   }
-  if (status === 'new' || status === 'in_review' || status === 'decided') {
-    return status;
-  }
-  return 'closed';
+
+  return 'open';
 }
 
 function normalizeLabel(label?: string): string | null {
@@ -534,9 +542,92 @@ function scorerDescription(key: string): string {
   return SCORERS.find((item) => item.key === key)?.description || 'Model score from backend.';
 }
 
-// Добавить в конец файла
+export interface AccountListItem {
+  id: number;
+  external_id: string;
+  username: string;
+  display_name?: string;
+  account_url?: string;
+  followers_count: number;
+  following_count: number;
+  posts_count: number;
+  is_bot: boolean;
+  is_verified: boolean;
+  dataset_post_count: number;
+  case_count: number;
+  root_post_count: number;
+  total_engagement: number;
+  avg_manipulation: number;
+  max_manipulation: number;
+  avg_risk_score: number;
+  high_risk_case_count: number;
+  first_seen_at?: string;
+  last_seen_at?: string;
+}
+
+export interface AccountsListResponse {
+  items: AccountListItem[];
+  total: number;
+  page: number;
+  limit: number;
+}
+
+export interface AccountsQuery {
+  dataset_name?: string;
+  dataset_split?: string;
+  search?: string;
+  verified?: boolean;
+  bots?: boolean;
+  sort?: string;
+  page?: number;
+  limit?: number;
+}
+
+export async function getAccounts(query: AccountsQuery = {}): Promise<AccountsListResponse> {
+  const params = toSearchParams({ ...query });
+  return requestJSON<AccountsListResponse>(`/accounts?${params.toString()}`);
+}
+
+export interface DashboardBreakdownItem {
+  name: string;
+  case_count: number;
+  avg_risk: number;
+}
+
+export interface DashboardTopRiskCase {
+  id: number;
+  external_case_id: string;
+  title: string;
+  event_name: string;
+  status: string;
+  label: string;
+  post_count: number;
+  risk_score: number;
+  risk_level: string;
+}
 
 export interface DashboardMetrics {
+  summary: {
+    total_cases: number;
+    mean_risk: number;
+    high_risk_share: number;
+    total_posts: number;
+    avg_posts_per_case: number;
+    open_cases: number;
+    closed_cases: number;
+    finalized_cases: number;
+    rumour_cases: number;
+    non_rumour_cases: number;
+  };
+  engagement: {
+    post_count: number;
+    total_likes: number;
+    total_reposts: number;
+    total_replies: number;
+    total_engagement: number;
+    unique_accounts: number;
+    verified_accounts: number;
+  };
   cases_over_time: Array<{
     date: string;
     total: number;
@@ -563,14 +654,48 @@ export interface DashboardMetrics {
     date: string;
     event_count: number;
   }>;
+  status_breakdown: DashboardBreakdownItem[];
+  label_breakdown: DashboardBreakdownItem[];
+  source_breakdown: DashboardBreakdownItem[];
+  dataset_breakdown: DashboardBreakdownItem[];
+  top_risk_cases: DashboardTopRiskCase[];
+  manipulation_stats?: {
+    avg_manipulation_score: number;
+    avg_coordination: number;
+    avg_temporal: number;
+    avg_narrative: number;
+    avg_confidence: number;
+    total_analyzed: number;
+    high_manipulation_count: number;
+  };
+  recent_evidence: Array<{
+    case_id: number;
+    case_title: string;
+    manipulation_score: number;
+    coordination: number;
+    temporal: number;
+    narrative: number;
+    summary: string;
+    created_at: string;
+  }>;
+  branch_time_series: Array<{
+    date: string;
+    coordination: number;
+    temporal: number;
+    narrative: number;
+    count: number;
+  }>;
+  manipulation_trend: Array<{
+    date: string;
+    avg_score: number;
+    coordination: number;
+    temporal: number;
+    narrative: number;
+    cases_count: number;
+  }>;
 }
 
 export async function getDashboardMetrics(query: CasesListQuery = {}): Promise<DashboardMetrics> {
-  const params = toSearchParams({
-    source_name: 'pheme_large',
-    dataset_name: 'pheme',
-    dataset_split: 'eventcv_large',
-    ...query,
-  });
+  const params = toSearchParams({ ...query });
   return requestJSON<DashboardMetrics>(`/dashboard/metrics?${params.toString()}`);
 }

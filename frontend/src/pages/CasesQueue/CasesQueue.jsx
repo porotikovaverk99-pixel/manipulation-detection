@@ -1,20 +1,27 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getCases, getCasesSummary } from '../../services/api';
+import { SCORERS, getCases, getCasesSummary } from '../../services/api';
+import { DEFAULT_SCORER } from '../../constants';
 import { ComponentMini, RiskPill, ScoreBar, SelectFilter, Sparkline, StateMessage, SummaryTile } from '../../components/ui';
 import { formatScore, summarize } from '../../utils/format';
 import styles from './CasesQueue.module.css';
 
 const EMPTY_FILTERS = {
+  scorer: DEFAULT_SCORER,
+  source: 'pheme_large',
+  split: 'eventcv_large',
   risk: 'all',
   event: 'all',
   label: 'all',
   status: 'all',
 };
 
+const SOURCE_OPTIONS = ['all', 'pheme_large', 'pheme'];
+const SPLIT_OPTIONS = ['all', 'eventcv_large', 'eventcv', 'evalmix', 'smoke'];
+
 const PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
 
-export function CasesQueue({ scorerKey }) {
+export function CasesQueue() {
   const navigate = useNavigate();
   const [data, setData] = useState(null);
   const [summaryData, setSummaryData] = useState(null);
@@ -24,23 +31,19 @@ export function CasesQueue({ scorerKey }) {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
 
-  useEffect(() => {
-    setPage(1);
-  }, [scorerKey]);
-
   const baseQuery = useMemo(
     () => ({
-      scorer_key: scorerKey,
-      source_name: 'pheme_large',
+      scorer_key: filters.scorer,
+      source_name: filters.source,
       dataset_name: 'pheme',
-      dataset_split: 'eventcv_large',
+      dataset_split: filters.split,
       event_name: filters.event,
       risk_level: filters.risk,
       label: filters.label,
       status: filters.status,
       limit: pageSize,
     }),
-    [scorerKey, filters, pageSize]
+    [filters, pageSize]
   );
 
   useEffect(() => {
@@ -73,8 +76,10 @@ export function CasesQueue({ scorerKey }) {
   const fallbackSummary = summarize(cases);
   const initialLoading = loading && !data && !summaryData;
   const currentPage = data?.page || page;
-  const totalPages = summaryData?.pages || 0;
-  const canGoNext = totalPages ? currentPage < totalPages : false;
+  const totalPages = Math.max(1, summaryData?.pages || 1);
+  const totalCases = summaryData?.total_cases ?? cases.length;
+  const pageStart = totalCases === 0 ? 0 : (currentPage - 1) * pageSize + 1;
+  const pageEnd = Math.min(totalCases, currentPage * pageSize);
 
   if (initialLoading) return <StateMessage title="Loading cases" text="Reading case-level scores from the backend." />;
   if (error && !data) return <StateMessage title="Backend unavailable" text={error} />;
@@ -84,8 +89,7 @@ export function CasesQueue({ scorerKey }) {
       <div className="page-head">
         <h1>Cases queue</h1>
         <p>
-          Ranked suspicious cases from <span className="mono">pheme / eventcv_large</span>. The active scorer is{' '}
-          <span className="mono accent">{scorerKey}</span>.
+          Ranked suspicious cases with configurable source, split, scorer and analyst filters.
         </p>
       </div>
 
@@ -98,10 +102,13 @@ export function CasesQueue({ scorerKey }) {
       </div>
 
       <div className="filters">
+        <SelectFilter label="scorer" value={filters.scorer} onChange={(value) => { setFilters((current) => ({ ...current, scorer: value })); setPage(1); }} options={SCORERS.map((scorer) => scorer.key)} />
+        <SelectFilter label="source" value={filters.source} onChange={(value) => { setFilters((current) => ({ ...current, source: value })); setPage(1); }} options={SOURCE_OPTIONS} />
+        <SelectFilter label="split" value={filters.split} onChange={(value) => { setFilters((current) => ({ ...current, split: value })); setPage(1); }} options={SPLIT_OPTIONS} />
         <SelectFilter label="event" value={filters.event} onChange={(value) => { setFilters((current) => ({ ...current, event: value })); setPage(1); }} options={['all', ...events]} />
         <SelectFilter label="risk" value={filters.risk} onChange={(value) => { setFilters((current) => ({ ...current, risk: value })); setPage(1); }} options={['all', 'high', 'medium', 'low']} />
         <SelectFilter label="label" value={filters.label} onChange={(value) => { setFilters((current) => ({ ...current, label: value })); setPage(1); }} options={['all', 'rumour', 'non-rumour']} />
-        <SelectFilter label="status" value={filters.status} onChange={(value) => { setFilters((current) => ({ ...current, status: value })); setPage(1); }} options={['all', 'open', 'closed', 'finalized', 'new', 'in_review', 'decided']} />
+        <SelectFilter label="status" value={filters.status} onChange={(value) => { setFilters((current) => ({ ...current, status: value })); setPage(1); }} options={['all', 'open', 'suspicious', 'not_suspicious', 'unclear']} />
         <SelectFilter
           label="page size"
           value={String(pageSize)}
@@ -114,19 +121,21 @@ export function CasesQueue({ scorerKey }) {
         <button className="button ghost" onClick={() => { setFilters(EMPTY_FILTERS); setPage(1); }}>Clear</button>
       </div>
 
-      <div className="pagination">
-        <button className="button" disabled={page <= 1 || loading} onClick={() => setPage((current) => Math.max(1, current - 1))}>
-          Previous
-        </button>
-        <span className="mono">Page {currentPage}{totalPages ? ` / ${totalPages}` : ''}{loading ? ' · loading...' : ''}</span>
-        <button className="button" disabled={!canGoNext || loading} onClick={() => setPage((current) => current + 1)}>
-          Next
-        </button>
-      </div>
+      <PaginationBar
+        page={currentPage}
+        pages={totalPages}
+        loading={loading}
+        range={`${pageStart}-${pageEnd}`}
+        total={totalCases}
+        onFirst={() => setPage(1)}
+        onPrev={() => setPage((current) => Math.max(1, current - 1))}
+        onNext={() => setPage((current) => Math.min(totalPages, current + 1))}
+        onLast={() => setPage(totalPages)}
+      />
 
       <div className="cases-table">
         <div className="case-row table-head">
-          <div>case</div>
+          <div>id</div>
           <div>title · event</div>
           <div>posts · duration</div>
           <div>score</div>
@@ -137,7 +146,15 @@ export function CasesQueue({ scorerKey }) {
         </div>
         {cases.map((item) => (
           <button key={item.id} className="case-row data-row" onClick={() => navigate(`/cases/${item.id}`)}>
-            <div className="case-id">#{item.id}</div>
+            <div className="case-id-cell">
+    <div className="case-id">#{item.id}</div>
+    <span className={`status-badge status-${item.status}`}>
+      {/* Можно сократить текст для красоты, если нужно */}
+      {item.status === 'not_suspicious' ? 'Safe' : 
+       item.status === 'suspicious' ? 'Susp' : 
+       item.status}
+    </span>
+  </div>
             <div className="case-title">
               <span>{item.title}</span>
               <small>{item.event_name} · {item.dataset_name}/{item.dataset_split}</small>
@@ -157,15 +174,29 @@ export function CasesQueue({ scorerKey }) {
         ))}
       </div>
 
-      <div className="pagination">
-        <button className="button" disabled={page <= 1 || loading} onClick={() => setPage((current) => Math.max(1, current - 1))}>
-          Previous
-        </button>
-        <span className="mono">Page {currentPage}{totalPages ? ` / ${totalPages}` : ''}{loading ? ' · loading...' : ''}</span>
-        <button className="button" disabled={!canGoNext || loading} onClick={() => setPage((current) => current + 1)}>
-          Next
-        </button>
-      </div>
+      <PaginationBar
+        page={currentPage}
+        pages={totalPages}
+        loading={loading}
+        range={`${pageStart}-${pageEnd}`}
+        total={totalCases}
+        onFirst={() => setPage(1)}
+        onPrev={() => setPage((current) => Math.max(1, current - 1))}
+        onNext={() => setPage((current) => Math.min(totalPages, current + 1))}
+        onLast={() => setPage(totalPages)}
+      />
     </section>
+  );
+}
+
+function PaginationBar({ page, pages, loading, range, total, onFirst, onPrev, onNext, onLast }) {
+  return (
+    <div className="pagination pagination-bar unified-pagination">
+      <button className="button" disabled={page <= 1 || loading} onClick={onFirst}>First</button>
+      <button className="button" disabled={page <= 1 || loading} onClick={onPrev}>Previous</button>
+      <span className="mono">Page {page} / {pages} · {range} of {total}{loading ? ' · loading...' : ''}</span>
+      <button className="button" disabled={page >= pages || loading} onClick={onNext}>Next</button>
+      <button className="button" disabled={page >= pages || loading} onClick={onLast}>Last</button>
+    </div>
   );
 }

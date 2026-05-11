@@ -8,15 +8,22 @@ import (
 	"github.com/porotikovaverk99-pixel/manipulation-detection/backend/internal/repository"
 )
 
-// IngestionHandler отдает наблюдаемость по dataset/live ingestion запускам.
-type IngestionHandler struct {
-	repo *repository.PostgresDB
+// ingestionRepository defines interface for ingestion data access
+type ingestionRepository interface {
+	GetIngestionRuns(limit int) ([]repository.IngestionRun, error)
 }
 
-func NewIngestionHandler(repo *repository.PostgresDB) *IngestionHandler {
+// IngestionHandler отдает наблюдаемость по dataset/live ingestion запускам.
+type IngestionHandler struct {
+	repo ingestionRepository
+}
+
+// NewIngestionHandler создаёт новый обработчик ingestion
+func NewIngestionHandler(repo ingestionRepository) *IngestionHandler {
 	return &IngestionHandler{repo: repo}
 }
 
+// ListRuns возвращает список запусков ingestion
 func (h *IngestionHandler) ListRuns() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		limit := 20
@@ -33,8 +40,9 @@ func (h *IngestionHandler) ListRuns() http.HandlerFunc {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		json.NewEncoder(w).Encode(map[string]interface{}{
 			"items": runs,
 			"count": len(runs),
 		})

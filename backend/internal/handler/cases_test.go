@@ -58,6 +58,10 @@ func (f *fakeCaseRepository) GetModelComparison(filter repository.ModelCompariso
 	return f.comparisonResult, f.modelComparisonErr
 }
 
+func (f *fakeCaseRepository) RecordCaseDecision(caseID int64, decision string) (repository.DecisionRecord, error) {
+	return repository.DecisionRecord{CaseID: caseID, Decision: decision, AuditID: "test"}, nil
+}
+
 func TestCasesHandlerListParsesFilters(t *testing.T) {
 	riskScore := 0.91
 	fake := &fakeCaseRepository{

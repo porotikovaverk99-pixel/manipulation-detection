@@ -31,6 +31,7 @@ type App struct {
 	ingestHandler    *handler.IngestionHandler
 	casesHandler     *handler.CasesHandler
 	dashboardHandler *handler.DashboardHandler
+	accountsHandler  *handler.AccountsHandler
 }
 
 // NewApp создаёт новое приложение.
@@ -61,6 +62,7 @@ func NewApp() (*App, error) {
 	ingestHandler := handler.NewIngestionHandler(db)
 	casesHandler := handler.NewCasesHandler(db)
 	dashboardHandler := handler.NewDashboardHandler(db)
+	accountsHandler := handler.NewAccountsHandler(db)
 
 	// Создаем сервер
 	srv := server.New(cfg.RunAddr)
@@ -76,41 +78,49 @@ func NewApp() (*App, error) {
 		ingestHandler:    ingestHandler,
 		casesHandler:     casesHandler,
 		dashboardHandler: dashboardHandler,
+		accountsHandler:  accountsHandler,
 	}, nil
 }
 
-// setupRoutes настраивает маршруты.
 func (a *App) setupRoutes() {
-	// Регистрируем маршруты
+	// 🎯 Сначала — глобальные мидлвары (ДО регистрации маршрутов!)
+	a.server.Use(a.corsMiddlewareGlobal)
+
+	// Потом — маршруты (без обёрток corsMiddleware!)
 	a.server.Handle("/ping", a.pingHandler.Ping())
 	a.server.Handle("/api/analyze", a.analyzeHandler.Analyze())
-	a.server.Get("/api/analysis/summary", a.corsMiddleware(a.analysisHandler.Summary()))
-	a.server.Get("/api/ingestion/runs", a.corsMiddleware(a.ingestHandler.ListRuns()))
-	a.server.Get("/api/cases", a.corsMiddleware(a.casesHandler.List()))
-	a.server.Get("/api/cases/summary", a.corsMiddleware(a.casesHandler.Summary()))
-	a.server.Get("/api/dashboard/metrics", a.corsMiddleware(a.dashboardHandler.Metrics()))
-	a.server.Get("/api/cases/{id}", a.corsMiddleware(a.casesHandler.Detail()))
-	a.server.Get("/api/cases/{id}/scores", a.corsMiddleware(a.casesHandler.Scores()))
-	a.server.Get("/api/model-comparison", a.corsMiddleware(a.casesHandler.ModelComparison()))
-
-	// Добавляем CORS для фронтенда
-	a.server.Handle("/api/", a.corsMiddleware(a.analyzeHandler.Analyze()))
+	a.server.Get("/api/analysis/summary", a.analysisHandler.Summary())
+	a.server.Get("/api/ingestion/runs", a.ingestHandler.ListRuns())
+	a.server.Get("/api/cases", a.casesHandler.List())
+	a.server.Get("/api/cases/summary", a.casesHandler.Summary())
+	a.server.Get("/api/cases/{id}", a.casesHandler.Detail())
+	a.server.Get("/api/cases/{id}/scores", a.casesHandler.Scores())
+	a.server.Post("/api/cases/{id}/decision", a.casesHandler.Decision()) // ← больше не нужен corsMiddleware!
+	a.server.Get("/api/model-comparison", a.casesHandler.ModelComparison())
+	a.server.Get("/api/accounts", a.accountsHandler.List())
+	a.server.Handle("/api/dashboard/metrics", a.dashboardHandler.Metrics())
+	a.server.Handle("/api/dashboard/summary", a.dashboardHandler.Summary())
+	a.server.Handle("/api/dashboard/radar/", a.dashboardHandler.RadarData())
+	a.server.Handle("/api/dashboard/evidence", a.dashboardHandler.RecentEvidence())
+	a.server.Handle("/api/dashboard/branch-series", a.dashboardHandler.BranchTimeSeries())
 }
 
-// corsMiddleware добавляет CORS заголовки.
-func (a *App) corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+// corsMiddlewareGlobal применяет CORS ко всем запросам ДО маршрутизации
+func (a *App) corsMiddlewareGlobal(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, PATCH")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
+		w.Header().Set("Access-Control-Max-Age", "86400") // 24 часа кэширования preflight
 
-		if r.Method == "OPTIONS" {
+		// Обрабатываем preflight-запрос
+		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
 
-		next(w, r)
-	}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // Run запускает приложение.

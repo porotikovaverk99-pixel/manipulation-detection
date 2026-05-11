@@ -1,6 +1,6 @@
 export type RiskLevel = 'high' | 'medium' | 'low';
 
-export type CaseStatus = 'open' | 'closed' | 'finalized' | 'new' | 'in_review' | 'decided';
+export type CaseStatus = 'open' | 'suspicious' | 'not_suspicious' | 'unclear';
 
 export type ScorerKey =
   | 'case_scores'
@@ -87,6 +87,7 @@ export interface CasesSummaryResponse {
 export interface PostItem {
   id: string;
   external_id: string;
+  account_id: number;
   author_handle: string;
   t_offset_sec: number;
   kind: 'root' | 'reply' | 'repost';
@@ -95,17 +96,26 @@ export interface PostItem {
   published_at: string;
   tags: string[];
   links: string[];
+  likes_count: number;
+  reposts_count: number;
+  followers_count: number;
+  following_count: number;
+  is_verified: boolean;
 }
 
 export interface AccountInvolved {
   id: number;
   external_id: string;
   handle: string;
+  display_name: string;
   joined_month: string;
   posts: number;
+  followers_count: number;
+  following_count: number;
   share: number;
   bot_score: number | null;
   is_verified: boolean;
+  has_root_post: boolean;
 }
 
 export interface UrlArtifact {
